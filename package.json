@@ -1,0 +1,24 @@
+{
+  "name": "vedio-make",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Subtitle → method selection → storyboard → scene renders → final video pipeline. Agent-in-the-loop (Claude picks methods, CLI does mechanical work).",
+  "bin": {
+    "pipeline": "./src/cli.ts"
+  },
+  "scripts": {
+    "plan": "tsx src/cli.ts plan",
+    "storyboard": "tsx src/cli.ts storyboard",
+    "render": "tsx src/cli.ts render",
+    "clean": "node -e \"const fs=require('fs'),p='output';if(fs.existsSync(p))for(const f of fs.readdirSync(p))fs.rmSync(require('path').join(p,f),{recursive:true,force:true})\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.5"
+  }
+}

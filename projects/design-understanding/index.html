@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>AI 的设计理解</title>
+    <script src="vendor/gsap.min.js"></script>
+    <style>
+      :root{
+        --bg:#0a0e14;--bg2:#131922;--bg3:#1a2330;
+        --green:#00ff9c;--cyan:#00d4ff;--pink:#ff5e94;
+        --yellow:#ffd93d;--purple:#b78aff;--dim:#2a3441;
+        --text:#e6e9ef;--mute:#6a7d92;--red:#ff5b5b;
+      }
+      *{margin:0;padding:0;box-sizing:border-box;}
+      html,body{width:100%;height:100%;background:var(--bg);}
+      #root{position:relative;width:1920px;height:1080px;overflow:hidden;
+        background:radial-gradient(75% 65% at 50% 44%,#0d1219 0%,#0a0e14 60%,#080b11 100%);
+        color:var(--text);
+        font-family:"SF Mono",Menlo,"DejaVu Sans Mono",ui-monospace,
+          "PingFang SC","Noto Sans SC",monospace;}
+      .bggrid{position:absolute;inset:0;z-index:0;
+        background-image:
+          linear-gradient(rgba(42,52,65,0.22) 1px,transparent 1px),
+          linear-gradient(90deg,rgba(42,52,65,0.22) 1px,transparent 1px);
+        background-size:68px 68px;}
+      .scene{position:absolute;inset:0;z-index:1;opacity:0;
+        display:flex;align-items:center;justify-content:center;}
+
+      /* shared card */
+      .card{width:560px;height:380px;border:3px solid var(--dim);border-radius:18px;
+        background:linear-gradient(150deg,var(--bg3),var(--bg2));position:relative;
+        box-shadow:0 22px 70px rgba(0,0,0,0.55);overflow:hidden;flex:none;}
+      .card .bar{position:absolute;top:0;left:0;right:0;height:54px;
+        background:rgba(0,0,0,0.28);border-bottom:2px solid var(--dim);
+        display:flex;align-items:center;gap:12px;padding:0 22px;}
+      .card .bar i{width:15px;height:15px;border-radius:50%;background:var(--dim);}
+      .card .hero{position:absolute;top:84px;left:30px;right:30px;height:172px;
+        border-radius:12px;border:2px solid var(--dim);
+        background:linear-gradient(135deg,rgba(0,212,255,0.18),rgba(183,138,255,0.18));}
+      .card .ln{position:absolute;left:30px;height:16px;border-radius:8px;background:var(--dim);}
+      .card .l1{top:282px;width:300px;} .card .l2{top:314px;width:210px;}
+      .card .cta{position:absolute;right:30px;bottom:28px;width:170px;height:54px;
+        border-radius:10px;background:var(--green);color:#06281d;font-weight:800;
+        font-size:24px;display:flex;align-items:center;justify-content:center;
+        box-shadow:0 0 26px rgba(0,255,156,0.45);}
+
+      /* ===== Phase A : stable card + accumulating checklist ===== */
+      .arow{display:flex;align-items:center;gap:80px;}
+      .clist{display:flex;flex-direction:column;gap:26px;width:430px;}
+      .ctitle{font-size:26px;letter-spacing:0.28em;color:var(--mute);
+        font-weight:800;margin-bottom:6px;}
+      .item{display:flex;align-items:center;gap:22px;opacity:0.34;}
+      .item .bx{width:44px;height:44px;border-radius:9px;border:2px solid var(--dim);
+        display:flex;align-items:center;justify-content:center;font-size:26px;
+        color:var(--green);flex:none;}
+      .item .ck{opacity:0;}
+      .item .tx{font-size:36px;font-weight:800;color:var(--text);}
+      .item .en{font-size:20px;color:var(--mute);letter-spacing:0.18em;margin-left:6px;}
+      .done{position:absolute;left:50%;bottom:150px;transform:translateX(-50%);
+        font-size:30px;font-weight:800;color:var(--green);letter-spacing:0.2em;
+        text-shadow:0 0 22px rgba(0,255,156,0.5);opacity:0;}
+
+      /* ===== Phase B : v0 legacy ===== */
+      .win{width:780px;height:470px;border:2px solid #3a2730;border-radius:12px;
+        background:#140f12;position:relative;box-shadow:0 22px 60px rgba(0,0,0,0.6);}
+      .win .tt{height:46px;background:#1d1418;border-bottom:2px solid #3a2730;
+        display:flex;align-items:center;padding:0 18px;color:#9a6a72;
+        font-size:20px;font-weight:700;}
+      .junk{position:absolute;font-family:inherit;color:#8a5560;font-size:30px;
+        font-weight:700;white-space:pre;line-height:1.35;}
+      .often{position:absolute;left:46px;bottom:34px;color:#7a5560;font-size:24px;opacity:0;}
+      .stamp{position:absolute;right:64px;bottom:64px;padding:14px 34px;
+        border:5px solid var(--red);color:var(--red);font-size:46px;font-weight:900;
+        border-radius:10px;transform:rotate(-13deg) scale(1.5);opacity:0;
+        text-shadow:0 0 18px rgba(255,91,91,0.5);box-shadow:0 0 30px rgba(255,91,91,0.22);}
+
+      /* ===== Phase C : pipeline (present, lights in sequence) ===== */
+      .pipe{display:flex;flex-direction:column;align-items:center;gap:22px;}
+      .stg{width:560px;height:118px;border-radius:14px;border:2px solid var(--dim);
+        background:var(--bg2);display:flex;align-items:center;gap:26px;padding:0 38px;
+        font-size:34px;font-weight:800;color:var(--mute);opacity:0.4;}
+      .stg .no{width:54px;height:54px;border-radius:50%;border:2px solid var(--dim);
+        display:flex;align-items:center;justify-content:center;font-size:28px;flex:none;}
+      .flow{width:4px;height:22px;background:var(--dim);border-radius:2px;opacity:0.4;}
+
+      /* ===== Phase D : payoff ===== */
+      .dwrap{display:flex;flex-direction:column;align-items:center;gap:40px;}
+      .badge{font-size:62px;font-weight:900;color:var(--green);letter-spacing:0.05em;
+        text-shadow:0 0 30px var(--green),0 0 70px rgba(0,255,156,0.45);opacity:0;}
+
+      .ind{position:absolute;bottom:32px;left:50%;transform:translateX(-50%);
+        display:flex;gap:14px;z-index:50;}
+      .dot{width:12px;height:12px;border-radius:50%;background:var(--dim);}
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="root" data-start="0" data-duration="11.4" data-width="1920" data-height="1080">
+      <div id="stage" class="clip" data-start="0" data-duration="11.4" data-track-index="0">
+        <div class="bggrid"></div>
+
+        <!-- Phase A : ONE stable frame, checklist fills in calmly -->
+        <div class="scene" id="A">
+          <div class="arow">
+            <div class="card" id="cardA">
+              <div class="bar"><i></i><i></i><i></i></div>
+              <div class="hero" id="heroA"></div>
+              <div class="ln l1"></div><div class="ln l2"></div>
+              <div class="cta">Action</div>
+            </div>
+            <div class="clist">
+              <div class="ctitle" id="ctitle">DESIGN&nbsp;UNDERSTANDING</div>
+              <div class="item" id="it1"><div class="bx" id="bx1"><span class="ck" id="ck1">✓</span></div>
+                <span class="tx">画面结构</span><span class="en">structure</span></div>
+              <div class="item" id="it2"><div class="bx" id="bx2"><span class="ck" id="ck2">✓</span></div>
+                <span class="tx">空间关系</span><span class="en">space</span></div>
+              <div class="item" id="it3"><div class="bx" id="bx3"><span class="ck" id="ck3">✓</span></div>
+                <span class="tx">交互设计</span><span class="en">interaction</span></div>
+              <div class="item" id="it4"><div class="bx" id="bx4"><span class="ck" id="ck4">✓</span></div>
+                <span class="tx">整体审美</span><span class="en">aesthetic</span></div>
+            </div>
+          </div>
+          <div class="done" id="doneA">理解的都更完整了</div>
+        </div>
+
+        <!-- Phase B : v0 legacy -->
+        <div class="scene" id="B">
+          <div class="win">
+            <div class="tt">● output.txt &nbsp;—&nbsp; AI v0</div>
+            <div class="junk" style="left:74px;top:96px;transform:rotate(-3deg)"> /\\_/\\</div>
+            <div class="junk" style="left:124px;top:156px;transform:rotate(2deg)">( o  .o)</div>
+            <div class="junk" style="left:64px;top:220px;transform:rotate(-4deg)"> &gt;  ^&lt;</div>
+            <div class="junk" style="left:152px;top:290px;transform:rotate(3deg)">\\__ __/</div>
+            <div class="often" id="often">// 很多时候…</div>
+            <div class="stamp" id="stamp">≈ 像那么回事</div>
+          </div>
+        </div>
+
+        <!-- Phase C : pipeline -->
+        <div class="scene" id="C">
+          <div class="pipe">
+            <div class="stg" id="sg1"><div class="no">1</div>字符布局</div>
+            <div class="flow" id="fl1"></div>
+            <div class="stg" id="sg2"><div class="no">2</div>物体结构</div>
+            <div class="flow" id="fl2"></div>
+            <div class="stg" id="sg3"><div class="no">3</div>交互效果</div>
+          </div>
+        </div>
+
+        <!-- Phase D : payoff -->
+        <div class="scene" id="D">
+          <div class="dwrap">
+            <div class="card" id="cardD">
+              <div class="bar"><i style="background:var(--pink)"></i><i style="background:var(--yellow)"></i><i style="background:var(--green)"></i></div>
+              <div class="hero" style="border-color:var(--cyan);background:linear-gradient(135deg,rgba(0,212,255,0.3),rgba(183,138,255,0.3))"></div>
+              <div class="ln l1" style="background:var(--mute)"></div>
+              <div class="ln l2" style="background:var(--mute)"></div>
+              <div class="cta">Action</div>
+            </div>
+            <div class="badge" id="badge">✓ 全部就位</div>
+          </div>
+        </div>
+
+        <div class="ind" id="ind"></div>
+      </div>
+    </div>
+
+    <script>
+      (function(){
+        window.__timelines = window.__timelines || {};
+        const tl = gsap.timeline({ paused:true });
+
+        const ind=document.getElementById("ind"); const dots=[];
+        for(let i=0;i<4;i++){const d=document.createElement("div");d.className="dot";ind.appendChild(d);dots.push(d);}
+        gsap.set(".scene",{opacity:0});
+
+        // 3 hard cuts only; long calm crossfades
+        const PH=[["A",0.0,4.07],["B",4.07,7.00],["C",7.00,9.73],["D",9.73,11.40]];
+        PH.forEach((p,i)=>{
+          const [id,s,e]=p;
+          tl.to("#"+id,{opacity:1,duration:0.5,ease:"power1.inOut"},s);
+          if(i<PH.length-1) tl.to("#"+id,{opacity:0,duration:0.5,ease:"power1.inOut"},e-0.1);
+          tl.to(dots[i],{backgroundColor:"#00ff9c",width:34,borderRadius:6,
+            boxShadow:"0 0 12px #00ff9c",duration:0.4},s);
+          if(i<PH.length-1) tl.to(dots[i],{backgroundColor:"#2a3441",width:12,
+            borderRadius:50,boxShadow:"0 0 0 rgba(0,0,0,0)",duration:0.4},e);
+        });
+
+        /* PHASE A — frame fully present early, then ONLY 4 gentle checks.
+           Nothing restructures: card + list are stable; items just light up. */
+        tl.fromTo("#cardA",{opacity:0,scale:0.96},
+          {opacity:1,scale:1,duration:0.6,ease:"power2.out"},0.05);
+        tl.fromTo([".ctitle","#it1","#it2","#it3","#it4"],{opacity:0,x:14},
+          {opacity:(i,t)=>t.classList&&t.classList.contains("ctitle")?0.7:0.34,
+           x:0,duration:0.5,ease:"power2.out",stagger:0.05},0.15);
+
+        // a calm "check" = box fills ✓ + its row brightens, slow & gentle
+        const check=(bx,ck,it,at)=>{
+          tl.to(bx,{borderColor:"#00ff9c",backgroundColor:"rgba(0,255,156,0.14)",
+            duration:0.45,ease:"sine.inOut"},at);
+          tl.fromTo(ck,{opacity:0,scale:0.5},
+            {opacity:1,scale:1,duration:0.4,ease:"power2.out",immediateRender:false},at+0.1);
+          tl.to(it,{opacity:1,duration:0.5,ease:"sine.inOut"},at);
+        };
+        check("#bx1","#ck1","#it1",0.55); // 95 画面结构
+        check("#bx2","#ck2","#it2",1.15); // 96 空间关系
+        check("#bx3","#ck3","#it3",1.78); // 97 交互设计
+        check("#bx4","#ck4","#it4",2.45); // 98 整体审美
+        // 99 理解的都更完整了 — one slow unifying glow + line, then hold
+        tl.to("#cardA",{boxShadow:"0 0 46px rgba(0,255,156,0.34)",
+          borderColor:"#00ff9c",duration:0.8,ease:"sine.inOut"},3.10);
+        tl.fromTo("#doneA",{opacity:0,y:14},
+          {opacity:1,y:0,duration:0.6,ease:"power2.out"},3.20);
+
+        /* PHASE B — window present, ASCII present (just dim); ONE stamp press */
+        tl.fromTo(".win",{opacity:0,scale:0.97},
+          {opacity:1,scale:1,duration:0.55,ease:"power2.out"},4.10);
+        tl.fromTo("#often",{opacity:0},{opacity:1,duration:0.5,ease:"power1.inOut"},5.35);
+        tl.fromTo("#stamp",{opacity:0,scale:1.5,rotate:-13},
+          {opacity:1,scale:1,rotate:-13,duration:0.6,ease:"power2.out",
+           immediateRender:false},5.95);
+
+        /* PHASE C — 3 stages present (dim); each lights in sequence, stays */
+        const lite=(sg,fl,at,col)=>{
+          tl.to(sg,{opacity:1,borderColor:col,color:"#e6e9ef",
+            boxShadow:"0 0 22px "+col+"44",duration:0.55,ease:"sine.inOut"},at);
+          tl.to(sg+" .no",{borderColor:col,color:col,duration:0.45,ease:"sine.inOut"},at);
+          if(fl) tl.to(fl,{opacity:1,backgroundColor:col,duration:0.4,
+            ease:"sine.inOut"},at+0.45);
+        };
+        // stages fade in once (stable), then light sequentially
+        tl.fromTo(["#sg1","#sg2","#sg3","#fl1","#fl2"],{opacity:0},
+          {opacity:0.4,duration:0.5,ease:"power1.inOut"},7.05);
+        lite("#sg1","#fl1",7.20,"#00d4ff");  // 字符布局
+        lite("#sg2","#fl2",8.15,"#b78aff");  // 物体结构
+        lite("#sg3",null ,9.05,"#00ff9c");   // 交互效果
+
+        /* PHASE D — one calm reveal + hold */
+        tl.fromTo("#cardD",{opacity:0,scale:0.92},
+          {opacity:1,scale:1,duration:0.7,ease:"power2.out"},9.80);
+        tl.to("#cardD",{boxShadow:"0 0 50px rgba(0,212,255,0.38)",
+          borderColor:"#00d4ff",duration:0.7,ease:"sine.inOut"},10.05);
+        tl.fromTo("#badge",{opacity:0,y:16},
+          {opacity:1,y:0,duration:0.6,ease:"power2.out",immediateRender:false},10.25);
+        tl.to("#badge",{textShadow:"0 0 42px #00ff9c,0 0 88px rgba(0,255,156,0.6)",
+          duration:0.8,ease:"sine.inOut"},10.85);
+
+        window.__timelines["root"]=tl;
+      })();
+    </script>
+  </body>
+</html>

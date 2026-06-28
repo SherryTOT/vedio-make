@@ -1,0 +1,384 @@
+{
+  "$comment": "Method registry — analyzer picks ONE method.id per scene from `methods` list. `wipMethods` are catalog'd but their renderer isn't built yet — DO NOT pick. Reliability: S=skill-backed, A=third-party skill, B=no skill.",
+  "methods": [
+    {
+      "id": "hf-kinetic-text",
+      "label": "GSAP Kinetic Text",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "text",
+        "title",
+        "emphasis",
+        "kinetic"
+      ],
+      "whenToUse": "Short title, hero phrase, emphasis word, or kinetic typography. Best for 1–8 word lines.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
+      "id": "hf-css-fade",
+      "label": "Plain CSS Fade Caption",
+      "engine": "hyperframes",
+      "skill": "css-animations",
+      "library": "css",
+      "reliability": "S",
+      "tags": [
+        "text",
+        "caption",
+        "subtitle",
+        "fallback"
+      ],
+      "whenToUse": "Universal fallback. Use when no stronger method fits — text just needs to appear. Always safe.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "implemented": true
+    },
+    {
+      "id": "hf-anime-scatter",
+      "label": "Anime.js Word Scatter Reveal",
+      "engine": "hyperframes",
+      "skill": "animejs",
+      "library": "animejs",
+      "reliability": "S",
+      "tags": [
+        "text",
+        "list",
+        "stagger",
+        "scatter"
+      ],
+      "whenToUse": "Lists of 3–7 items, comma-delimited enumerations, or text where words should fly in one by one with stagger.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
+      "id": "hf-waapi-marker",
+      "label": "WAAPI Highlight Marker Sweep",
+      "engine": "hyperframes",
+      "skill": "waapi",
+      "library": "waapi",
+      "reliability": "S",
+      "tags": [
+        "text",
+        "emphasis",
+        "highlight",
+        "marker"
+      ],
+      "whenToUse": "When a single phrase or word inside a longer line needs to be highlighted with a marker sweep / underline / circle.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
+      "id": "rm-d3-bar-chart",
+      "label": "D3 Bar Chart (Remotion)",
+      "engine": "remotion",
+      "skill": "data-visualization",
+      "library": "d3",
+      "reliability": "A",
+      "tags": [
+        "data",
+        "chart",
+        "comparison",
+        "bars",
+        "stats"
+      ],
+      "whenToUse": "Comparing 3–10 numerical values (rankings, scores, PPG, revenue per period). One categorical axis + one numerical axis.",
+      "inputs": [
+        "text",
+        "data:array"
+      ],
+      "assetNeeds": [
+        "data:json"
+      ],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
+      "id": "rm-d3-line-trend",
+      "label": "D3 Line / Trend Chart (Remotion)",
+      "engine": "remotion",
+      "skill": "data-visualization",
+      "library": "d3",
+      "reliability": "A",
+      "tags": [
+        "data",
+        "trend",
+        "timeseries",
+        "line"
+      ],
+      "whenToUse": "Showing change over time. Continuous data on a temporal x-axis.",
+      "inputs": [
+        "text",
+        "data:timeseries"
+      ],
+      "assetNeeds": [
+        "data:json"
+      ],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
+      "id": "rm-framer-card-stack",
+      "label": "Framer Motion Card Stack (Remotion)",
+      "engine": "remotion",
+      "skill": "framer-motion-animator",
+      "library": "framer-motion",
+      "reliability": "A",
+      "tags": [
+        "cards",
+        "feature-list",
+        "comparison",
+        "rows"
+      ],
+      "whenToUse": "When the line introduces 2–5 named things to compare (products, libraries, options). Each becomes a Framer Motion card that springs into place.",
+      "inputs": [
+        "text",
+        "items"
+      ],
+      "assetNeeds": [],
+      "fallback": "rm-d3-bar-chart",
+      "implemented": true
+    },
+    {
+      "id": "hf-lottie-play",
+      "label": "Lottie Animation Play",
+      "engine": "hyperframes",
+      "skill": "lottie",
+      "library": "lottie",
+      "reliability": "S",
+      "tags": [
+        "icon",
+        "logo",
+        "lottie",
+        "loop"
+      ],
+      "whenToUse": "When a .lottie/.json animation asset exists and the line invites watching it (logo reveal, icon explanation, animated illustration).",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [
+        "lottie:.json"
+      ],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
+      "id": "rm-image-kenburns",
+      "label": "Image Ken Burns Pan/Zoom (Remotion)",
+      "engine": "remotion",
+      "skill": "remotion-best-practices",
+      "library": "remotion",
+      "reliability": "S",
+      "tags": [
+        "image",
+        "photo",
+        "cinematic",
+        "kenburns"
+      ],
+      "whenToUse": "When the line narrates over a single image and wants a cinematic slow pan/zoom feel (Ken Burns).",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [
+        "image"
+      ],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
+      "id": "rm-video-clip",
+      "label": "Raw Video Clip (Remotion passthrough)",
+      "engine": "remotion",
+      "skill": "remotion-best-practices",
+      "library": "remotion",
+      "reliability": "S",
+      "tags": [
+        "video",
+        "footage",
+        "broll",
+        "clip"
+      ],
+      "whenToUse": "When the asset pool has a B-roll/clip whose duration matches the scene. Just plays it back with light grade.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [
+        "video"
+      ],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
+      "id": "hf-tailwind-card",
+      "label": "Tailwind Tile / Pricing-Card",
+      "engine": "hyperframes",
+      "skill": "tailwind",
+      "library": "tailwindcss",
+      "reliability": "S",
+      "tags": [
+        "card",
+        "tile",
+        "product",
+        "pricing"
+      ],
+      "whenToUse": "When the line introduces a single product/feature in a tile-style frame. Cheap and clean.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
+      "id": "hf-chapter-card",
+      "label": "Chapter Title Card",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "title",
+        "chapter",
+        "section"
+      ],
+      "whenToUse": "Chapter/section divider card (小Lin说 dark/gold). scene.text='第六章|多米诺骨牌|Dominoes|97-99' (chapNo|titleCN|titleEN|years).",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-kinetic-text",
+      "implemented": true
+    },
+    {
+      "id": "hf-stat-counter",
+      "label": "Stat Counter (count-up)",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "number",
+        "stat",
+        "callout",
+        "kinetic"
+      ],
+      "whenToUse": "Big single-number / statistic callout with count-up animation. scene.text='300|%|香港隔夜拆借利率|1997.10' (value|suffix|label|sublabel; value may carry $/¥ prefix; non-numeric shown literally).",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-kinetic-text",
+      "implemented": true
+    }
+  ],
+  "wipMethods": [
+    {
+      "id": "hf-three-poster",
+      "label": "Three.js Layered Poster Camera Orbit",
+      "engine": "hyperframes",
+      "skill": "three",
+      "library": "three",
+      "reliability": "S",
+      "tags": [
+        "3d",
+        "poster",
+        "image",
+        "layers",
+        "camera"
+      ],
+      "whenToUse": "When there is a layered image asset (poster/PSD-style) and the line narrates spatial/structural analysis of it. Camera orbits in 3D.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [
+        "image-layers"
+      ],
+      "fallback": "hf-css-fade",
+      "implemented": false
+    },
+    {
+      "id": "rm-framer-table",
+      "label": "Framer Motion Comparison Table (Remotion)",
+      "engine": "remotion",
+      "skill": "framer-motion-animator",
+      "library": "framer-motion",
+      "reliability": "A",
+      "tags": [
+        "table",
+        "comparison",
+        "matrix",
+        "row-stagger"
+      ],
+      "whenToUse": "Long comparison tables (10+ rows, 3+ columns). Rows fade in staggered, current row highlights.",
+      "inputs": [
+        "text",
+        "table"
+      ],
+      "assetNeeds": [
+        "data:json"
+      ],
+      "fallback": "rm-framer-card-stack",
+      "implemented": false
+    },
+    {
+      "id": "rm-rive-interactive",
+      "label": "Rive State-Machine Animation (Remotion)",
+      "engine": "remotion",
+      "skill": "rive-interactive",
+      "library": "rive-react",
+      "reliability": "A",
+      "tags": [
+        "interactive",
+        "rive",
+        "ui-demo",
+        "state"
+      ],
+      "whenToUse": "When the narration describes interaction/state-changes and a .riv file exists in assets/. Best for UI demos, character animations, micro-interactions.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [
+        "rive:.riv"
+      ],
+      "fallback": "hf-css-fade",
+      "implemented": false
+    },
+    {
+      "id": "rm-fabric-canvas-draw",
+      "label": "Fabric.js Canvas Drawing (Remotion)",
+      "engine": "remotion",
+      "skill": "fabric",
+      "library": "fabric",
+      "reliability": "B",
+      "tags": [
+        "canvas",
+        "draw",
+        "shapes",
+        "diagram"
+      ],
+      "whenToUse": "Free-form diagrams: arrows, circles, callouts drawn programmatically. When no static image fits but you need a shape-based illustration.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-css-fade",
+      "implemented": false
+    }
+  ]
+}

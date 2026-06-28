@@ -1,0 +1,478 @@
+#!/usr/bin/env -S npx tsx
+/**
+ * pipeline CLI — three subcommands:
+ *
+ *   pipeline plan <subtitle.srt> [--title T] [--out output/storyboard.json]
+ *     Parse SRT → write skeleton storyboard.json (method/fallback/reasoning = null)
+ *
+ *   pipeline storyboard [--in output/storyboard.json] [--out output/storyboard.html]
+ *     Render storyboard.json → storyboard.html (human preview with tier badges)
+ *
+ *   pipeline render [--in output/storyboard.json] [--only N] [--force]
+ *     For each scene with a method, generate source and render its MP4.
+ *     Stitch all scene MP4s into output/final.mp4 (unless --only).
+ *
+ * Project root is detected by looking up from cwd for the nearest package.json
+ * with "name":"video-pipeline".
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { runPlan } from "./plan.ts";
+import { writeStoryboardHtml } from "./storyboard.ts";
+import { runRender } from "./render.ts";
+import { runTts } from "./tts.ts";
+import { runSay, defaultSayOut } from "./say.ts";
+import { runVoice } from "./voice.ts";
+import { runBgm } from "./bgm.ts";
+import { runAnalyze } from "./analyze.ts";
+import { runImages } from "./images.ts";
+import { runResearch } from "./research.ts";
+import { runMatte } from "./matte.ts";
+import { runFetch } from "./fetch-assets.ts";
+import { runTranslate } from "./translate.ts";
+import { runImport } from "./import-assets.ts";
+import { runEdit } from "./edit.ts";
+import { startServer } from "./server.ts";
+import crypto from "node:crypto";
+import { getTts, listProviders } from "./providers/registry.ts";
+
+function findProjectRoot(start: string): string {
+  let cur = start;
+  for (let i = 0; i < 8; i++) {
+    const pkg = path.join(cur, "package.json");
+    if (fs.existsSync(pkg)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(pkg, "utf8"));
+        if (data.name === "video-pipeline") return cur;
+      } catch {}
+    }
+    const parent = path.dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return path.dirname(fileURLToPath(import.meta.url)).replace(/\/src$/, "");
+}
+
+function parseFlags(argv: string[]): Record<string, string | boolean> {
+  const flags: Record<string, string | boolean> = {};
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith("--")) {
+      const key = a.slice(2);
+      const next = argv[i + 1];
+      if (next && !next.startsWith("--")) {
+        flags[key] = next;
+        i++;
+      } else {
+        flags[key] = true;
+      }
+    } else {
+      flags._ = (flags._ as string) ? (flags._ as string) + " " + a : a;
+    }
+  }
+  return flags;
+}
+
+function usage(): never {
+  const chatProvs = listProviders("chat").join(" | ");
+  const ttsProvs = listProviders("tts").join(" | ");
+  const imageProvs = listProviders("image").join(" | ");
+  const searchProvs = listProviders("search").join(" | ");
+  console.error(`Usage:
+  pipeline plan <subtitle.srt> [--title T] [--width 1920] [--height 1080] [--fps 30] [--out output/storyboard.json]
+  pipeline analyze   [--in JSON] [--provider <${chatProvs}>] [--fill-only]
+  pipeline edit      "<instruction>" [--in JSON] [--provider <${chatProvs}>] [--dry-run] [--yes]
+  pipeline approve   [--in JSON]   (mark stages.approved = true; render gates on this)
+  pipeline storyboard [--in JSON] [--out HTML]
+  pipeline research  [--in JSON] [--provider <${searchProvs}>] [--chat-provider <${chatProvs}>] [--force]
+  pipeline images    [--in JSON] [--provider <${imageProvs}>] [--chat-provider <${chatProvs}>] [--aspect 16:9] [--scene N] [--n 1-3] [--raw] [--force]
+  pipeline tts       [--in JSON] [--provider <${ttsProvs}>] [--voice <id>] [--speed 1.0] [--force]
+  pipeline say       "<text>" | --file F  [--voice <id>] [--speed 1.0] [--emotion happy] [--out mp3] [--provider <${ttsProvs}>]
+                     (read ANY text aloud → one mp3; free Edge voices need no key, minimax:* are paid)
+  pipeline voice     clone <audio> --label "名字"  |  list  |  keepalive <id>  |  rm <id>
+                     (MiniMax voice cloning; cloned voices are usable as minimax:user_<hex>)
+  pipeline bgm       [--in JSON] [--prompt "free-form"] [--force]
+  pipeline voices    [--provider <${ttsProvs}>]   (list available voice ids; grouped: edge/minimax/clone)
+  pipeline matte     [<input.png>] [--asset <rel>] [--all-generated] [--auto] [--scene N] [--force]
+                     (--auto: matte every scene the analyzer flagged needsMatting)
+  pipeline fetch     <query> [--provider pexels|unsplash|pixabay|51yuansu|envato] [--type photo|video|psd|...] [--orientation] [--count N] [--scene N]
+  pipeline import    <folder|file> [--scene N] [--pattern '*.psd'] [--foreground] [--symlink]
+  pipeline translate <lang>  [--in JSON] [--source <lang>] [--provider] [--force]
+  pipeline render    [--in JSON] [--only N] [--force] [--workers 2]
+  pipeline serve     [--port 8766] [--host 127.0.0.1] [--token <bearer>] [--projects ./projects]
+`);
+  process.exit(1);
+}
+
+async function main() {
+  const [cmd, ...rest] = process.argv.slice(2);
+  if (!cmd) usage();
+
+  const root = findProjectRoot(process.cwd());
+  const catalogPath = path.join(root, "methods", "catalog.json");
+
+  if (cmd === "plan") {
+    const positional = rest.filter((a) => !a.startsWith("--"));
+    const flags = parseFlags(rest);
+    const srtArg = positional[0];
+    if (!srtArg) usage();
+    const srtPath = path.resolve(process.cwd(), srtArg);
+    if (!fs.existsSync(srtPath)) {
+      console.error(`Subtitle file not found: ${srtPath}`);
+      process.exit(1);
+    }
+    const outPath = path.resolve(root, (flags.out as string) || "output/storyboard.json");
+    const title = (flags.title as string) || path.basename(srtPath, path.extname(srtPath));
+    const designDoc = (flags.design as string) || "design.md";
+    const assetsDir = path.resolve(root, "assets");
+    const width = parseInt((flags.width as string) || "1920", 10);
+    const height = parseInt((flags.height as string) || "1080", 10);
+    const fps = parseInt((flags.fps as string) || "30", 10);
+
+    const sb = runPlan({ srtPath, outPath, designDoc, assetsDir, title, width, height, fps });
+    console.log(`✓ Parsed ${sb.scenes.length} cues → ${path.relative(process.cwd(), outPath)}`);
+    console.log(`  Asset pool: ${sb.assetPool.length} file(s)`);
+    console.log(`  Next step:  Claude fills method/fallback/reasoning for each scene, then run:`);
+    console.log(`    pipeline storyboard`);
+    return;
+  }
+
+  if (cmd === "storyboard") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const outPath = path.resolve(root, (flags.out as string) || "output/storyboard.html");
+    if (!fs.existsSync(inPath)) {
+      console.error(`Storyboard JSON not found: ${inPath}`);
+      console.error(`Run 'pipeline plan <subtitle.srt>' first.`);
+      process.exit(1);
+    }
+    writeStoryboardHtml(inPath, catalogPath, outPath);
+    console.log(`✓ Wrote ${path.relative(process.cwd(), outPath)}`);
+    console.log(`  Open in browser:  file://${outPath}`);
+    return;
+  }
+
+  if (cmd === "analyze") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const designPath = path.resolve(root, "design.md");
+    const assetsDir = path.resolve(root, "assets");
+    const fillOnly = Boolean(flags["fill-only"]);
+    const provider = flags.provider as string | undefined;
+    if (!fs.existsSync(inPath)) {
+      console.error(`Storyboard JSON not found: ${inPath}`);
+      console.error(`Run 'pipeline plan <subtitle.srt>' first.`);
+      process.exit(1);
+    }
+    await runAnalyze({
+      storyboardPath: inPath,
+      catalogPath,
+      designPath,
+      assetsDir,
+      projectRoot: root,
+      fillOnly,
+      provider,
+    });
+    console.log(`\n  Next: pipeline storyboard  (preview HTML), then 'pipeline render' to render.`);
+    return;
+  }
+
+  if (cmd === "edit") {
+    const positional = rest.filter((a) => !a.startsWith("--"));
+    const flags = parseFlags(rest);
+    const instruction = positional.join(" ").trim();
+    if (!instruction) { console.error(`edit: instruction required (in quotes)`); process.exit(1); }
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
+    await runEdit({
+      instruction,
+      storyboardPath: inPath,
+      catalogPath,
+      provider: flags.provider as string | undefined,
+      dryRun: Boolean(flags["dry-run"]),
+      yes: Boolean(flags.yes),
+    });
+    return;
+  }
+
+  if (cmd === "approve") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
+    const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
+    sb.stages = { ...(sb.stages ?? {}), approved: true };
+    fs.writeFileSync(inPath, JSON.stringify(sb, null, 2));
+    console.log(`✓ Storyboard approved. 'pipeline render' will now run without --force.`);
+    return;
+  }
+
+  if (cmd === "research") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const force = Boolean(flags.force);
+    const searchProvider = flags.provider as string | undefined;
+    const chatProvider = flags["chat-provider"] as string | undefined;
+    if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
+    await runResearch({ storyboardPath: inPath, force, searchProvider, chatProvider });
+    return;
+  }
+
+  if (cmd === "images") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const assetsDir = path.resolve(root, "assets");
+    const designPath = path.resolve(root, "design.md");
+    const force = Boolean(flags.force);
+    const rawPrompts = Boolean(flags.raw);
+    const provider = flags.provider as string | undefined;
+    const chatProvider = flags["chat-provider"] as string | undefined;
+    const aspect = (flags.aspect as string | undefined) as
+      | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | undefined;
+    const onlyIndices = flags.scene ? [parseInt(flags.scene as string, 10)] : undefined;
+    if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
+    const candidates = flags.n ? parseInt(flags.n as string, 10) : 1;
+    await runImages({
+      storyboardPath: inPath,
+      assetsDir,
+      designPath,
+      projectRoot: root,
+      force,
+      provider,
+      chatProvider,
+      aspectRatio: aspect,
+      onlyIndices,
+      rawPrompts,
+      candidates,
+    });
+    return;
+  }
+
+  if (cmd === "voices") {
+    const flags = parseFlags(rest);
+    const provider = flags.provider as string | undefined;
+    const ttsClient = getTts(provider);
+    // The router exposes grouped voices (edge / minimax / clone); others are flat.
+    const grouped = (ttsClient as any).groupedVoices?.();
+    if (grouped) {
+      const GROUPS: Array<[string, string]> = [
+        ["edge", "免费 · Edge"],
+        ["minimax", "付费 · MiniMax 系统"],
+        ["minimax_clone", "我的克隆"],
+      ];
+      console.log(`Available voices (provider '${ttsClient.id}'):`);
+      for (const [key, title] of GROUPS) {
+        const items = grouped.filter((v: any) => v.group === key);
+        if (!items.length) continue;
+        console.log(`\n  [${title}]`);
+        for (const v of items) {
+          const g = v.gender ? `${v.gender.padEnd(6)}` : "      ";
+          console.log(`    ${v.id.padEnd(42)} ${g}  ${v.label}`);
+        }
+      }
+      console.log(`\n  用法: pipeline say "文本" --voice <id>   或   pipeline tts --voice <id>`);
+      return;
+    }
+    console.log(`Available voices for provider '${ttsClient.id}':\n`);
+    for (const v of ttsClient.voices()) {
+      const tags = v.tags?.length ? `  (${v.tags.join(", ")})` : "";
+      const g = v.gender ? `${v.gender.padEnd(6)}` : "      ";
+      console.log(`  ${v.id.padEnd(40)} ${g}  ${v.label}${tags}`);
+    }
+    return;
+  }
+
+  if (cmd === "tts") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const voiceDir = path.resolve(root, "output/voice");
+    const trackPath = path.resolve(root, "output/voice-track.json");
+    const voiceId = (flags.voice as string) || "presenter_male";
+    const speed = flags.speed ? parseFloat(flags.speed as string) : 1.0;
+    const force = Boolean(flags.force);
+    const provider = flags.provider as string | undefined;
+    if (!fs.existsSync(inPath)) {
+      console.error(`Storyboard JSON not found: ${inPath}`);
+      process.exit(1);
+    }
+    await runTts({ storyboardPath: inPath, voiceDir, trackPath, projectRoot: root, voiceId, speed, force, provider });
+    return;
+  }
+
+  if (cmd === "say") {
+    const positional = rest.filter((a) => !a.startsWith("--"));
+    const flags = parseFlags(rest);
+    let text = positional.join(" ").trim();
+    if (flags.file) {
+      const fp = path.resolve(process.cwd(), flags.file as string);
+      if (!fs.existsSync(fp)) { console.error(`say: file not found: ${fp}`); process.exit(1); }
+      text = fs.readFileSync(fp, "utf8");
+    }
+    if (!text.trim()) { console.error(`say: text required (quote it) or pass --file <path>`); process.exit(1); }
+    const voiceId = (flags.voice as string) || "zh-CN-XiaoxiaoNeural";
+    const speed = flags.speed ? parseFloat(flags.speed as string) : 1.0;
+    const emotion = flags.emotion as string | undefined;
+    const provider = flags.provider as string | undefined;
+    const outPath = flags.out
+      ? path.resolve(process.cwd(), flags.out as string)
+      : defaultSayOut(root, text, voiceId);
+    await runSay({ text, outPath, voiceId, speed, emotion, provider });
+    return;
+  }
+
+  if (cmd === "voice") {
+    const positional = rest.filter((a) => !a.startsWith("--"));
+    const flags = parseFlags(rest);
+    const sub = positional[0];
+    if (!sub) { console.error(`voice: subcommand required — clone | list | keepalive | rm`); process.exit(1); }
+    await runVoice(sub, positional.slice(1), flags);
+    return;
+  }
+
+  if (cmd === "bgm") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const outPath = path.resolve(root, "output/bgm.mp3");
+    const force = Boolean(flags.force);
+    const promptOverride = (flags.prompt as string) || undefined;
+    const provider = flags.provider as string | undefined;
+    if (!fs.existsSync(inPath)) {
+      console.error(`Storyboard JSON not found: ${inPath}`);
+      process.exit(1);
+    }
+    await runBgm({ storyboardPath: inPath, outPath, force, promptOverride, provider });
+    return;
+  }
+
+  if (cmd === "serve") {
+    const flags = parseFlags(rest);
+    const port = parseInt((flags.port as string) || process.env.PIPELINE_PORT || "8766", 10);
+    const host = (flags.host as string) || "127.0.0.1";
+    const projectsDir = path.resolve(root, (flags.projects as string) || "projects");
+    let token = (flags.token as string) || process.env.PIPELINE_TOKEN || "";
+    if (!token && !flags["no-auth"]) {
+      token = crypto.randomBytes(24).toString("base64url");
+      console.log(`[serve] no PIPELINE_TOKEN set; generated: ${token}`);
+    }
+    fs.mkdirSync(projectsDir, { recursive: true });
+    await startServer({ port, host, token, projectsDir });
+    return; // server runs forever
+  }
+
+  if (cmd === "translate") {
+    const positional = rest.filter((a) => !a.startsWith("--"));
+    const flags = parseFlags(rest);
+    const targetLang = positional[0];
+    if (!targetLang) { console.error(`translate: target lang required (e.g. en, ja, zh-tw)`); process.exit(1); }
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
+    await runTranslate({
+      storyboardPath: inPath,
+      outputDir: path.resolve(root, "output"),
+      targetLang,
+      sourceLang: flags.source as string | undefined,
+      provider: flags.provider as string | undefined,
+      force: Boolean(flags.force),
+    });
+    return;
+  }
+
+  if (cmd === "import") {
+    const positional = rest.filter((a) => !a.startsWith("--"));
+    const flags = parseFlags(rest);
+    const source = positional[0];
+    if (!source) { console.error(`import: source folder or file required`); process.exit(1); }
+    const sceneIndex = flags.scene ? parseInt(flags.scene as string, 10) : undefined;
+    const storyboardPath = path.resolve(root, "output/storyboard.json");
+    await runImport({
+      source,
+      projectRoot: root,
+      storyboardPath: fs.existsSync(storyboardPath) ? storyboardPath : undefined,
+      pattern: flags.pattern as string | undefined,
+      sceneIndex,
+      asForeground: Boolean(flags.foreground),
+      symlink: Boolean(flags.symlink),
+    });
+    return;
+  }
+
+  if (cmd === "fetch") {
+    const positional = rest.filter((a) => !a.startsWith("--"));
+    const flags = parseFlags(rest);
+    const query = positional.join(" ").trim();
+    if (!query) { console.error(`fetch: query required`); process.exit(1); }
+    const provider = flags.provider as string | undefined;
+    const type = (flags.type as string | undefined) as any;
+    const orientation = (flags.orientation as string | undefined) as any;
+    const count = flags.count ? parseInt(flags.count as string, 10) : 1;
+    const sceneIndex = flags.scene ? parseInt(flags.scene as string, 10) : undefined;
+    const storyboardPath = path.resolve(root, "output/storyboard.json");
+    await runFetch({
+      query, provider, type, orientation, count,
+      sceneIndex,
+      projectRoot: root,
+      storyboardPath: fs.existsSync(storyboardPath) ? storyboardPath : undefined,
+    });
+    return;
+  }
+
+  if (cmd === "matte") {
+    const positional = rest.filter((a) => !a.startsWith("--"));
+    const flags = parseFlags(rest);
+    const inputPath = positional[0];
+    const assetPath = flags.asset as string | undefined;
+    const allGenerated = Boolean(flags["all-generated"]);
+    const auto = Boolean(flags.auto);
+    const force = Boolean(flags.force);
+    const sceneIndex = flags.scene ? parseInt(flags.scene as string, 10) : undefined;
+    const device = (flags.device as string) || "auto";
+    const storyboardPath = path.resolve(root, "output/storyboard.json");
+    await runMatte({
+      inputPath,
+      assetPath,
+      allGenerated,
+      auto,
+      sceneIndex,
+      projectRoot: root,
+      storyboardPath: fs.existsSync(storyboardPath) ? storyboardPath : undefined,
+      force,
+      device,
+    });
+    return;
+  }
+
+  if (cmd === "render") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const outputDir = path.resolve(root, "output");
+    const only = flags.only ? parseInt(flags.only as string, 10) : null;
+    const force = Boolean(flags.force);
+    const workers = flags.workers ? parseInt(flags.workers as string, 10) : 1;
+    if (!fs.existsSync(inPath)) {
+      console.error(`Storyboard JSON not found: ${inPath}`);
+      process.exit(1);
+    }
+    await runRender({ storyboardPath: inPath, outputDir, projectRoot: root, force, only, workers });
+    return;
+  }
+
+  console.error(`Unknown command: ${cmd}`);
+  usage();
+}
+
+main().catch((e) => {
+  // Clean one-line errors for users; full stack only with PIPELINE_DEBUG=1.
+  // (Edge TTS is a soft dependency — its handshake can fail on restricted
+  //  networks; surface a hint instead of an undici stack dump.)
+  const msg = (e as Error)?.message || String(e);
+  if (process.env.PIPELINE_DEBUG) {
+    console.error(e);
+  } else {
+    console.error(`✗ ${msg}`);
+    if (/Edge 配音组件|Edge TTS/.test(msg)) {
+      console.error(`  提示: Edge 免费引擎在当前网络握手失败,改用 MiniMax 付费音色(--voice minimax:<id>,如 minimax:female-shaonv),或检查网络/代理。`);
+    }
+  }
+  process.exit(1);
+});

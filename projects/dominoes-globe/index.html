@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>多米诺骨牌 — 传染地球仪</title>
+    <script src="vendor/gsap.min.js"></script>
+    <script src="vendor/three.min.js"></script>
+    <script src="world.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; background: #04050a; }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background:
+          radial-gradient(120% 90% at 50% 46%, #0a1413 0%, #070a0e 42%, #05060b 66%, #040509 100%);
+        font-family: 'PingFang SC','Noto Sans SC','Source Han Sans SC','Microsoft YaHei',sans-serif;
+        color: #fff;
+      }
+
+      #globe {
+        position: absolute;
+        inset: 0;
+        width: 1920px;
+        height: 1080px;
+        display: block;
+        z-index: 1;
+      }
+
+      /* deep-red ambient corner blooms + vignette */
+      #ambient {
+        position: absolute; inset: 0; z-index: 2; pointer-events: none;
+        background:
+          radial-gradient(60% 70% at 6% 4%,   rgba(120,20,20,0.55) 0%, rgba(60,12,12,0.0) 55%),
+          radial-gradient(60% 70% at 96% 4%,  rgba(120,20,20,0.50) 0%, rgba(60,12,12,0.0) 55%),
+          radial-gradient(70% 80% at 4% 98%,  rgba(110,18,18,0.50) 0%, rgba(50,10,10,0.0) 58%),
+          radial-gradient(70% 80% at 98% 96%, rgba(110,18,18,0.45) 0%, rgba(50,10,10,0.0) 58%),
+          radial-gradient(95% 95% at 50% 50%, rgba(0,0,0,0) 52%, rgba(0,0,0,0.55) 100%);
+      }
+
+      .pill {
+        position: absolute; z-index: 4; pointer-events: none;
+        transform: translate(-50%, -50%);
+        font-size: 21px; font-weight: 600; letter-spacing: 1px;
+        white-space: nowrap; will-change: transform, opacity;
+        text-shadow: 0 0 7px rgba(0,0,0,0.95), 0 2px 5px rgba(0,0,0,0.92), 0 0 2px rgba(0,0,0,0.9);
+      }
+      #lbl-th { color: #ffe6bf; }
+      #lbl-jp { color: #ffe6bf; }
+      #lbl-hk {
+        color: #fff; background: #d6361c;
+        padding: 5px 13px; border-radius: 6px; font-weight: 700;
+        box-shadow: 0 0 18px rgba(255,70,40,0.7), 0 2px 6px rgba(0,0,0,0.6);
+      }
+      .dot { display:inline-block; width:7px; height:7px; border-radius:50%;
+             background:#ffd27a; box-shadow:0 0 8px #ffd27a; margin-right:7px;
+             vertical-align: middle; }
+
+      /* left chapter card */
+      #card {
+        position: absolute; left: 0; bottom: 150px; z-index: 5;
+        width: 322px; padding: 26px 30px 28px 34px;
+        background: linear-gradient(135deg, #45121b 0%, #2f0c11 100%);
+        border-right: 2px solid #6a2028;
+        border-top-right-radius: 16px; border-bottom-right-radius: 16px;
+        box-shadow: 0 18px 50px rgba(0,0,0,0.6);
+      }
+      #card .thumb {
+        width: 56px; height: 56px; border-radius: 50%;
+        background: radial-gradient(circle at 40% 35%, #7a2630, #2c0a0f 75%);
+        border: 1px solid #7a2832; position: relative; overflow: hidden;
+        margin-bottom: 16px;
+      }
+      #card .thumb i {
+        position:absolute; width:9px; height:24px; border-radius:1px;
+        background:#e7c7b6; box-shadow:0 0 4px rgba(0,0,0,0.5);
+      }
+      #card .thumb i:nth-child(1){ left:15px; top:16px; transform:rotate(-16deg);}
+      #card .thumb i:nth-child(2){ left:24px; top:16px; transform:rotate(-7deg);}
+      #card .thumb i:nth-child(3){ left:33px; top:17px; transform:rotate(5deg);}
+      #card .chap { font-size: 15px; color: #eaaab1; letter-spacing: 6px; }
+      #card .title-cn {
+        font-size: 38px; font-weight: 800; color: #fff; margin-top: 8px;
+        letter-spacing: 2px; white-space: nowrap;
+      }
+      #card .title-en {
+        font-size: 14px; color: #c98a93; letter-spacing: 5px; margin-top: 5px;
+        text-transform: uppercase;
+      }
+      #card .tag {
+        display: inline-block; margin-top: 18px; font-size: 14px; font-weight: 700;
+        color: #ffd6e0; background: #b5325a; padding: 4px 14px; border-radius: 4px;
+        letter-spacing: 3px;
+      }
+
+      /* bilibili watermark */
+      #wm {
+        position: absolute; top: 26px; right: 34px; z-index: 5;
+        font-size: 22px; font-weight: 700; opacity: 0.82;
+        display: flex; align-items: center; gap: 8px;
+      }
+      #wm .lin { color: #fff; }
+      #wm .bili { color: #fb7299; font-style: italic; font-weight: 800; }
+
+      /* bottom year timeline ruler */
+      #ruler {
+        position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
+        height: 140px; pointer-events: none;
+      }
+      #ruler svg { width: 100%; height: 100%; display: block; }
+      #ruler .yr { fill: #c6c6cf; font-size: 19px; font-weight: 600;
+                   font-family: 'PingFang SC',sans-serif; }
+      #ruler .ev { fill: #ffd9d2; font-size: 19px; font-weight: 700;
+                   font-family: 'PingFang SC',sans-serif; }
+
+      /* subtitle */
+      #subs {
+        position: absolute; left: 0; right: 0; bottom: 182px; z-index: 6;
+        text-align: center; pointer-events: none;
+      }
+      #subs span {
+        position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
+        font-size: 46px; font-weight: 800; color: #fff; white-space: nowrap;
+        opacity: 0;
+        text-shadow: 0 3px 10px rgba(0,0,0,0.95), 0 0 4px rgba(0,0,0,0.9);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="root" data-start="0" data-duration="6" data-width="1920" data-height="1080">
+      <div id="stage" class="clip" data-start="0" data-duration="6" data-track-index="0">
+        <canvas id="globe"></canvas>
+        <div id="ambient"></div>
+
+        <div id="lbl-th" class="pill">泰国</div>
+        <div id="lbl-jp" class="pill"><span class="dot"></span>日本</div>
+        <div id="lbl-hk" class="pill">中国香港</div>
+
+        <div id="card">
+          <div class="thumb"><i></i><i></i><i></i></div>
+          <div class="chap">第 六 章</div>
+          <div class="title-cn">多米诺骨牌</div>
+          <div class="title-en">Dominoes</div>
+          <div class="tag">97 — 99</div>
+        </div>
+
+        <div id="wm"><span class="lin">小Lin说</span><span class="bili">bilibili</span></div>
+
+        <div id="ruler">
+          <svg viewBox="0 0 1920 140">
+            <g id="ticks"></g>
+            <text id="evlabel" class="ev" text-anchor="middle"></text>
+            <g id="playhead"></g>
+          </svg>
+        </div>
+
+        <div id="subs">
+          <span id="s0">而这次的攻势</span>
+          <span id="s1">比之前八月份那次</span>
+          <span id="s2">要猛烈的多</span>
+          <span id="s3">香港受到了第二次进攻</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== TIMELINE RULER (built once) ===================== -->
+    <script>
+      (function buildRuler() {
+        const ticks = document.getElementById("ticks");
+        const NS = "http://www.w3.org/2000/svg";
+        // year -> x. Compress 2000..2010 like the reference (uneven scale).
+        const stops = [
+          [1995, 70], [1996, 230], [1997, 470], [1998, 760],
+          [1999, 1010], [2000, 1230], [2005, 1560], [2010, 1850],
+        ];
+        function xOf(y) {
+          for (let i = 0; i < stops.length - 1; i++) {
+            const [ya, xa] = stops[i], [yb, xb] = stops[i + 1];
+            if (y >= ya && y <= yb) return xa + (xb - xa) * ((y - ya) / (yb - ya));
+          }
+          return stops[stops.length - 1][1];
+        }
+        const baseY = 88;
+        const axis = document.createElementNS(NS, "line");
+        axis.setAttribute("x1", 0); axis.setAttribute("x2", 1920);
+        axis.setAttribute("y1", baseY); axis.setAttribute("y2", baseY);
+        axis.setAttribute("stroke", "rgba(210,210,220,0.5)");
+        axis.setAttribute("stroke-width", "1.5");
+        ticks.appendChild(axis);
+        // minor ticks every 0.1yr, major every year
+        for (let y = 1995; y <= 2010; y += 0.1) {
+          const yr = Math.round(y * 10) / 10;
+          const major = Math.abs(yr - Math.round(yr)) < 0.001;
+          const x = xOf(yr);
+          const t = document.createElementNS(NS, "line");
+          t.setAttribute("x1", x); t.setAttribute("x2", x);
+          t.setAttribute("y1", baseY);
+          t.setAttribute("y2", baseY + (major ? 16 : 7));
+          t.setAttribute("stroke", major ? "rgba(225,225,235,0.85)" : "rgba(175,175,185,0.5)");
+          t.setAttribute("stroke-width", major ? "1.6" : "1");
+          ticks.appendChild(t);
+          if (major && (yr <= 2000 || yr === 2005 || yr === 2010)) {
+            const lab = document.createElementNS(NS, "text");
+            lab.setAttribute("x", x); lab.setAttribute("y", baseY + 42);
+            lab.setAttribute("text-anchor", "middle");
+            lab.setAttribute("class", "yr");
+            lab.textContent = yr;
+            ticks.appendChild(lab);
+          }
+        }
+        // playhead at 泰铢脱钩 (Thai baht float ~ 1997.5)
+        const phx = xOf(1997.5);
+        const ph = document.getElementById("playhead");
+        const dash = document.createElementNS(NS, "line");
+        dash.setAttribute("x1", phx); dash.setAttribute("x2", phx);
+        dash.setAttribute("y1", baseY - 46); dash.setAttribute("y2", baseY);
+        dash.setAttribute("stroke", "rgba(255,255,255,0.6)");
+        dash.setAttribute("stroke-width", "1.4");
+        dash.setAttribute("stroke-dasharray", "3 3");
+        ph.appendChild(dash);
+        const tri = document.createElementNS(NS, "path");
+        tri.setAttribute("d", `M ${phx - 10} ${baseY + 2} L ${phx + 10} ${baseY + 2} L ${phx} ${baseY + 18} Z`);
+        tri.setAttribute("fill", "#ff4a3a");
+        ph.appendChild(tri);
+        const ev = document.getElementById("evlabel");
+        ev.setAttribute("x", phx);
+        ev.setAttribute("y", baseY - 54);
+        ev.textContent = "泰铢脱钩";
+      })();
+    </script>
+
+    <!-- ===================== GSAP OVERLAY TIMELINE ===================== -->
+    <script>
+      (function () {
+        window.__timelines = window.__timelines || {};
+        const tl = gsap.timeline({ paused: true });
+
+        tl.from("#card", { x: -60, opacity: 0, duration: 0.7, ease: "power3.out" }, 0.1);
+        tl.from("#ruler", { y: 26, opacity: 0, duration: 0.7, ease: "power2.out" }, 0.15);
+        tl.from("#wm", { opacity: 0, duration: 0.6, ease: "power1.out" }, 0.2);
+
+        // subtitle cues — non-overlapping (exit completes before next enters)
+        const cues = [
+          ["#s0", 0.10, 1.55],
+          ["#s1", 1.55, 2.85],
+          ["#s2", 2.85, 3.95],
+          ["#s3", 3.95, 6.00],
+        ];
+        cues.forEach(([sel, a, b], i) => {
+          tl.fromTo(sel, { opacity: 0 }, { opacity: 1, duration: 0.18, ease: "power1.out" }, a);
+          if (i < cues.length - 1) {
+            tl.to(sel, { opacity: 0, duration: 0.14, ease: "power1.in" }, b - 0.16);
+          }
+        });
+
+        window.__timelines["root"] = tl;
+      })();
+    </script>
+
+    <!-- ===================== THREE.JS GLOBE ===================== -->
+    <script>
+      const W = 1920, H = 1080;
+      const R = 2.0; // globe radius
+
+      // ---- tuning (orientation / camera) ----
+      const TUNE = {
+        centerLon: 113,   // longitude facing camera
+        centerLat: 22,    // latitude tilt toward camera (≈ Hong Kong)
+        camZ0: 5.15,      // start camera distance
+        camZ1: 4.80,      // end camera distance (slow push-in)
+        rotSpeed: 0.016,  // globe auto-rotation rad/s
+        duration: 6,
+      };
+
+      const DEG = Math.PI / 180;
+      function latLonToVec3(lat, lon, radius) {
+        const phi = (90 - lat) * DEG;
+        const theta = (lon + 180) * DEG;
+        return new THREE.Vector3(
+          -radius * Math.sin(phi) * Math.cos(theta),
+           radius * Math.cos(phi),
+           radius * Math.sin(phi) * Math.sin(theta),
+        );
+      }
+
+      // ---- equirectangular country texture ----
+      function makeEarthTexture() {
+        const TW = 4096, TH = 2048;
+        const cv = document.createElement("canvas");
+        cv.width = TW; cv.height = TH;
+        const g = cv.getContext("2d");
+        g.fillStyle = "#060f0d";
+        g.fillRect(0, 0, TW, TH);
+        const px = (lon) => ((lon + 180) / 360) * TW;
+        const py = (lat) => ((90 - lat) / 180) * TH;
+        const rings = (window.__WORLD && window.__WORLD.countries) || [];
+        for (const r of rings) {
+          let minL = 999, maxL = -999;
+          for (let i = 0; i < r.length; i += 2) {
+            if (r[i] < minL) minL = r[i];
+            if (r[i] > maxL) maxL = r[i];
+          }
+          if (maxL - minL > 180) continue; // skip dateline-wrapping rings
+          g.beginPath();
+          for (let i = 0; i < r.length; i += 2) {
+            const x = px(r[i]), y = py(r[i + 1]);
+            i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+          }
+          g.closePath();
+          g.fillStyle = "#0f231e";
+          g.fill();
+          g.lineWidth = 1.1;
+          g.strokeStyle = "rgba(140,210,182,0.32)";
+          g.stroke();
+        }
+        // Thailand highlighted fill
+        const th = (window.__WORLD && window.__WORLD.thailand) || [];
+        for (const r of th) {
+          g.beginPath();
+          for (let i = 0; i < r.length; i += 2) {
+            const x = px(r[i]), y = py(r[i + 1]);
+            i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+          }
+          g.closePath();
+          const b = th[0];
+          const grd = g.createLinearGradient(px(b[0]), py(b[1]), px(b[0]) + 60, py(b[1]) + 90);
+          grd.addColorStop(0, "#c5882b");
+          grd.addColorStop(1, "#7c5417");
+          g.fillStyle = grd;
+          g.fill();
+          g.lineWidth = 1.4;
+          g.strokeStyle = "rgba(255,205,135,0.7)";
+          g.stroke();
+        }
+        const tex = new THREE.CanvasTexture(cv);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 8;
+        return tex;
+      }
+
+      // ---- radial glow sprite ----
+      function glowTexture(inner, outer) {
+        const s = 256;
+        const cv = document.createElement("canvas");
+        cv.width = cv.height = s;
+        const g = cv.getContext("2d");
+        const grd = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+        grd.addColorStop(0.0, inner);
+        grd.addColorStop(0.07, outer);
+        grd.addColorStop(0.36, outer.replace(/[\d.]+\)$/, "0.18)"));
+        grd.addColorStop(1.0, "rgba(0,0,0,0)");
+        g.fillStyle = grd;
+        g.fillRect(0, 0, s, s);
+        return new THREE.CanvasTexture(cv);
+      }
+      function makeGlow(tex, scale, color) {
+        const m = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: tex, color, blending: THREE.AdditiveBlending,
+            depthWrite: false, depthTest: false, transparent: true,
+          }),
+        );
+        m.scale.set(scale, scale, 1);
+        return m;
+      }
+
+      // ---- scene ----
+      const canvas = document.getElementById("globe");
+      const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+      renderer.setSize(W, H, false);
+      renderer.setPixelRatio(1);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(30, W / H, 0.1, 100);
+
+      const globe = new THREE.Group();
+      scene.add(globe);
+
+      const earth = new THREE.Mesh(
+        new THREE.SphereGeometry(R, 96, 96),
+        new THREE.MeshBasicMaterial({ map: makeEarthTexture() }),
+      );
+      globe.add(earth);
+
+      // faint atmosphere rim
+      const atmo = new THREE.Mesh(
+        new THREE.SphereGeometry(R * 1.04, 64, 64),
+        new THREE.MeshBasicMaterial({
+          color: 0x163e37, transparent: true, opacity: 0.07,
+          side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
+        }),
+      );
+      globe.add(atmo);
+
+      // hotspots (children of globe so they rotate with the surface)
+      const gHot = glowTexture("rgba(255,255,255,0.95)", "rgba(255,70,40,0.85)");
+      const gOrange = glowTexture("rgba(255,240,200,0.95)", "rgba(255,160,40,0.8)");
+      const gGold = glowTexture("rgba(255,250,220,0.95)", "rgba(255,200,90,0.75)");
+
+      const HK = latLonToVec3(22.3, 114.16, R * 1.012);
+      const TH = latLonToVec3(15.2, 101.0, R * 1.012);
+      const JP = latLonToVec3(36.2, 138.2, R * 1.012);
+
+      const hkGlow = makeGlow(gHot, 0.92, 0xff3418);
+      const hkCore = makeGlow(gHot, 0.24, 0xffffff);
+      const thGlow = makeGlow(gOrange, 0.66, 0xff9a2e);
+      const jpGlow = makeGlow(gGold, 0.30, 0xffd27a);
+      hkGlow.position.copy(HK); hkCore.position.copy(HK);
+      thGlow.position.copy(TH);
+      jpGlow.position.copy(JP);
+      globe.add(hkGlow, hkCore, thGlow, jpGlow);
+
+      // Tube geometry using the globe-radial as a stable reference frame.
+      // (THREE.TubeGeometry's Frenet frames degenerate on smooth beziers ->
+      //  NaN vertices that silently never render.)
+      function ribbonTube(curve, seg, radius, rings) {
+        const pos = [], idx = [];
+        const P = new THREE.Vector3(), Pn = new THREE.Vector3();
+        const T = new THREE.Vector3(), N = new THREE.Vector3(),
+          B = new THREE.Vector3(), up = new THREE.Vector3();
+        for (let i = 0; i <= seg; i++) {
+          const t = i / seg;
+          P.copy(curve.getPoint(t));
+          // central difference — never collapses at the endpoints
+          const ta = Math.max(0, t - 1e-3), tb = Math.min(1, t + 1e-3);
+          Pn.copy(curve.getPoint(tb));
+          T.copy(Pn).sub(curve.getPoint(ta)).normalize();
+          up.copy(P).normalize();                 // radial — never ∥ tangent
+          N.copy(T).cross(up).normalize();
+          if (!isFinite(N.x) || N.lengthSq() < 1e-6) N.set(1, 0, 0);
+          B.copy(T).cross(N).normalize();
+          if (!isFinite(B.x)) B.set(0, 1, 0);
+          for (let j = 0; j < rings; j++) {
+            const a = (j / rings) * Math.PI * 2;
+            const cx = Math.cos(a) * radius, cy = Math.sin(a) * radius;
+            pos.push(
+              P.x + N.x * cx + B.x * cy,
+              P.y + N.y * cx + B.y * cy,
+              P.z + N.z * cx + B.z * cy,
+            );
+          }
+        }
+        for (let i = 0; i < seg; i++) {
+          for (let j = 0; j < rings; j++) {
+            const a = i * rings + j, b = i * rings + ((j + 1) % rings);
+            const c = (i + 1) * rings + j, d = (i + 1) * rings + ((j + 1) % rings);
+            idx.push(a, b, d, a, d, c);
+          }
+        }
+        const gm = new THREE.BufferGeometry();
+        gm.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+        gm.setIndex(idx);
+        gm.computeBoundingSphere();
+        return gm;
+      }
+
+      // gold great-circle arc HK -> Japan
+      const arcA = latLonToVec3(22.3, 114.16, R * 1.02);
+      const arcB = latLonToVec3(36.2, 138.2, R * 1.02);
+      const arcMid = arcA.clone().add(arcB).multiplyScalar(0.5).normalize().multiplyScalar(R * 1.085);
+      const arcCurve = new THREE.QuadraticBezierCurve3(arcA, arcMid, arcB);
+      const arcGeo = ribbonTube(arcCurve, 160, 0.014, 10);
+      // Opaque material — transparent MeshBasicMaterial silently fails to
+      // render on this geometry in the capture engine; reveal via drawRange.
+      const arcMat = new THREE.MeshBasicMaterial({
+        color: 0xffce82, side: THREE.DoubleSide,
+      });
+      const arcLine = new THREE.Mesh(arcGeo, arcMat);
+      arcLine.frustumCulled = false;
+      globe.add(arcLine);
+      const arcHead = makeGlow(gGold, 0.24, 0xffe0a0);
+      globe.add(arcHead);
+
+      // incoming red attack streaks (world space, aimed at HK)
+      const STREAKS = [
+        { sx: -3.6, sy: 4.4, sz: 2.0, period: 0.78, phase: 0.0 },
+        { sx: -1.2, sy: 5.0, sz: 1.4, period: 0.66, phase: 0.30 },
+        { sx:  1.8, sy: 4.6, sz: 1.8, period: 0.72, phase: 0.55 },
+        { sx:  4.0, sy: 3.4, sz: 1.2, period: 0.60, phase: 0.18 },
+      ];
+      const gRed = glowTexture("rgba(255,255,255,0.95)", "rgba(255,40,30,0.9)");
+      const streakObjs = STREAKS.map((s) => {
+        const geo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(), new THREE.Vector3(),
+        ]);
+        const line = new THREE.Line(
+          geo,
+          new THREE.LineBasicMaterial({
+            color: 0xff3a2a, transparent: true, opacity: 0.0,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+          }),
+        );
+        scene.add(line);
+        const tracer = makeGlow(gRed, 0.30, 0xff3a22);
+        scene.add(tracer);
+        return { def: s, line, geo, tracer };
+      });
+
+      // ---- per-frame render ----
+      const labels = {
+        hk: { el: document.getElementById("lbl-hk"), v: HK.clone(), off: [42, -4] },
+        th: { el: document.getElementById("lbl-th"), v: TH.clone(), off: [-10, -78] },
+        jp: { el: document.getElementById("lbl-jp"), v: JP.clone(), off: [40, -2] },
+      };
+      const tmp = new THREE.Vector3();
+      const tmpN = new THREE.Vector3();
+
+      function lerp(a, b, t) { return a + (b - a) * t; }
+
+      function renderAt(time) {
+        const d = TUNE.duration;
+        const tn = Math.max(0, Math.min(time, d));
+
+        // orientation + slow push-in
+        globe.rotation.y = -(TUNE.centerLon + 90) * DEG + tn * TUNE.rotSpeed;
+        globe.rotation.x = TUNE.centerLat * DEG;
+        camera.position.set(0, 0, lerp(TUNE.camZ0, TUNE.camZ1, tn / d));
+        camera.lookAt(0, 0, 0);
+
+        // pulsing hotspots
+        const pHK = 1 + 0.16 * Math.sin(tn * (2 * Math.PI / 1.05));
+        const pTH = 1 + 0.10 * Math.sin(tn * (2 * Math.PI / 1.8) + 1.0);
+        const pJP = 1 + 0.10 * Math.sin(tn * (2 * Math.PI / 1.5) + 2.0);
+        hkGlow.scale.set(0.92 * pHK, 0.92 * pHK, 1);
+        hkGlow.material.opacity = 0.62 + 0.20 * (pHK - 1) / 0.16;
+        hkCore.scale.set(0.24 * (1 + 0.12 * (pHK - 1) / 0.16), 0.24, 1);
+        hkCore.material.opacity = 0.85;
+        thGlow.scale.set(0.66 * pTH, 0.66 * pTH, 1);
+        thGlow.material.opacity = 0.55;
+        jpGlow.scale.set(0.30 * pJP, 0.30 * pJP, 1);
+        jpGlow.material.opacity = 0.7;
+
+        // flowing energy head sweeping HK -> Japan along the persistent arc
+        const hp = (tn / 1.5) % 1;
+        arcHead.position.copy(arcCurve.getPoint(hp));
+        arcHead.material.opacity = 0.5 + 0.4 * Math.sin(hp * Math.PI);
+
+        // HK world position (streak target follows rotation)
+        const hkWorld = globe.localToWorld(HK.clone());
+
+        for (const so of streakObjs) {
+          const s = so.def;
+          const src = new THREE.Vector3(s.sx, s.sy, s.sz);
+          const positions = so.geo.attributes.position;
+          positions.setXYZ(0, src.x, src.y, src.z);
+          positions.setXYZ(1, hkWorld.x, hkWorld.y, hkWorld.z);
+          positions.needsUpdate = true;
+          const u = ((tn / s.period) + s.phase) % 1;       // 0..1 travel
+          const fade = Math.sin(Math.min(u, 1) * Math.PI);  // bright mid-flight
+          so.line.material.opacity = 0.16 + 0.44 * fade;
+          so.tracer.position.lerpVectors(src, hkWorld, u);
+          const tsc = 0.26 + 0.34 * fade;
+          so.tracer.scale.set(tsc, tsc, 1);
+          so.tracer.material.opacity = 0.30 + 0.78 * fade;
+        }
+
+        renderer.render(scene, camera);
+
+        // project HTML pills
+        for (const k in labels) {
+          const L = labels[k];
+          const world = globe.localToWorld(L.v.clone());
+          tmpN.copy(world).normalize();
+          const toCam = tmp.copy(camera.position).sub(world).normalize();
+          const facing = tmpN.dot(toCam);
+          const p = world.clone().project(camera);
+          const sx = (p.x * 0.5 + 0.5) * W + L.off[0];
+          const sy = (-p.y * 0.5 + 0.5) * H + L.off[1];
+          L.el.style.left = sx + "px";
+          L.el.style.top = sy + "px";
+          L.el.style.opacity = facing > 0.12 ? "1" : "0";
+        }
+      }
+
+      window.addEventListener("hf-seek", (e) => renderAt(e.detail.time));
+      renderAt(window.__hfThreeTime || 0);
+    </script>
+  </body>
+</html>

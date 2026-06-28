@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>ASCII 字符画的难度 — 视觉推理</title>
+    <script src="vendor/gsap.min.js"></script>
+    <style>
+      :root {
+        --bg:#0a0e14; --bg2:#131922; --bg3:#1a2330;
+        --green:#00ff9c; --cyan:#00d4ff; --pink:#ff5e94;
+        --yellow:#ffd93d; --purple:#b78aff; --dim:#2a3441;
+        --text:#e6e9ef; --mute:#6a7d92;
+      }
+      * { margin:0; padding:0; box-sizing:border-box; }
+      html, body { width:100%; height:100%; background:var(--bg); }
+      #root {
+        position:relative; width:1920px; height:1080px; overflow:hidden;
+        background:var(--bg); color:var(--text);
+        font-family:"SF Mono",Menlo,"DejaVu Sans Mono",ui-monospace,
+          "PingFang SC","Noto Sans SC",monospace;
+      }
+      .bg-grid {
+        position:absolute; inset:0; z-index:0;
+        background-image:
+          linear-gradient(rgba(42,52,65,0.30) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(42,52,65,0.30) 1px, transparent 1px);
+        background-size:60px 60px;
+      }
+      .scene {
+        position:absolute; inset:0; z-index:1; opacity:0;
+        display:flex; align-items:center; justify-content:center; flex-direction:column;
+      }
+
+      /* S1 matrix + title */
+      #matrix { position:absolute; inset:0; overflow:hidden; z-index:0; }
+      .mcol {
+        position:absolute; top:-70%; width:22px; font-size:20px; line-height:1.5;
+        color:var(--green); white-space:pre; text-shadow:0 0 6px var(--green);
+        font-weight:700;
+      }
+      .title-hero {
+        position:relative; z-index:10; text-align:center;
+        background:radial-gradient(ellipse, rgba(10,14,20,0.96) 35%, transparent 72%);
+        padding:60px 120px;
+      }
+      .title-ascii {
+        font-size:54px; font-weight:700; color:var(--green); line-height:1.15;
+        white-space:pre; margin-bottom:34px; text-shadow:0 0 22px var(--green);
+      }
+      .title-text {
+        font-size:104px; font-weight:800; color:var(--text); letter-spacing:0.14em;
+        text-shadow:0 0 40px rgba(0,212,255,0.7);
+      }
+      .title-sub { margin-top:26px; color:var(--cyan); letter-spacing:0.42em; font-size:30px; }
+
+      /* S2 easy tiles */
+      .easy-row { display:flex; gap:34px; }
+      .easy-tile {
+        position:relative; width:150px; height:150px; background:var(--bg2);
+        border:3px solid var(--dim); border-radius:18px; display:flex;
+        align-items:center; justify-content:center; font-size:84px; font-weight:800;
+        color:var(--text); opacity:0;
+      }
+      .easy-tile .tk {
+        position:absolute; bottom:-46px; font-size:34px; color:var(--green);
+        text-shadow:0 0 12px var(--green); opacity:0;
+      }
+      .easy-cap { margin-top:90px; font-size:34px; color:var(--mute); letter-spacing:0.2em; opacity:0; }
+
+      /* S3 no image */
+      .noimg-row { display:flex; align-items:center; gap:90px; }
+      .img-frame {
+        width:320px; height:320px; border:4px solid var(--dim); border-radius:22px;
+        background:linear-gradient(135deg,var(--bg3),var(--bg2)); position:relative; overflow:hidden;
+      }
+      .img-frame::before {
+        content:""; position:absolute; left:0; right:0; bottom:0; height:55%;
+        background:linear-gradient(180deg,transparent,rgba(42,52,65,0.6));
+        clip-path:polygon(0 100%,30% 58%,50% 80%,70% 38%,100% 70%,100% 100%);
+      }
+      .img-frame::after {
+        content:""; position:absolute; top:26%; right:24%; width:54px; height:54px;
+        border-radius:50%; background:var(--mute); opacity:0.55;
+      }
+      .xb,.xa {
+        position:absolute; top:50%; left:-26px; right:-26px; height:14px; margin-top:-7px;
+        background:var(--pink); border-radius:7px; box-shadow:0 0 34px var(--pink);
+        transform-origin:center; transform:rotate(45deg) scaleX(0);
+      }
+      .xa { transform:rotate(-45deg) scaleX(0); }
+      .noimg-txt .lab { color:var(--mute); font-size:34px; letter-spacing:0.08em; margin-bottom:18px; opacity:0; }
+      .noimg-txt .val { color:var(--pink); font-size:64px; font-weight:800;
+        text-shadow:0 0 22px rgba(255,94,148,0.55); opacity:0; }
+
+      /* S4 neural */
+      .neural-wrap { width:1100px; height:560px; position:relative; }
+      .neural-svg { width:100%; height:100%; }
+      .nn-node { fill:var(--cyan); filter:drop-shadow(0 0 9px var(--cyan)); opacity:0; }
+      .nn-line { stroke:var(--cyan); stroke-width:1.4; fill:none; opacity:0;
+        stroke-dasharray:240; stroke-dashoffset:240; }
+      .nn-chip {
+        position:absolute; top:50%; left:50%; transform:translate(-50%,-50%) scale(0.8);
+        font-size:34px; font-weight:800; color:var(--green); letter-spacing:0.3em;
+        background:var(--bg); padding:18px 44px; border-radius:10px;
+        border:2px solid var(--green); text-shadow:0 0 12px var(--green);
+        z-index:10; opacity:0;
+      }
+
+      /* shared grid */
+      .gwrap { display:flex; flex-direction:column; align-items:center; gap:46px; }
+      .glabel { color:var(--cyan); font-size:38px; letter-spacing:0.16em; font-weight:800;
+        text-shadow:0 0 14px rgba(0,212,255,0.5); opacity:0; }
+      .board {
+        display:grid; grid-template-columns:repeat(7,128px);
+        grid-template-rows:repeat(3,128px); gap:7px; background:var(--dim);
+        padding:7px; border-radius:14px; box-shadow:0 16px 60px rgba(0,0,0,0.55);
+      }
+      .gc {
+        background:var(--bg2); display:flex; align-items:center; justify-content:center;
+        font-size:62px; font-weight:800; color:var(--text); position:relative;
+        border-radius:6px;
+      }
+      .gc.ghost { background:var(--bg); border:3px dashed var(--cyan); color:var(--cyan);
+        font-size:42px; opacity:0; }
+      .gc.fill { color:var(--green); text-shadow:0 0 12px var(--green); opacity:0; }
+      .ctag {
+        position:absolute; top:-26px; right:-4px; font-size:16px; color:var(--cyan);
+        background:var(--bg); padding:2px 7px; border-radius:4px; border:1px solid var(--cyan);
+      }
+      .gridfx { position:relative; display:inline-block; }
+      .arow,.acol { position:absolute; pointer-events:none; border-radius:5px; opacity:0; }
+      .arow { left:7px; right:7px; height:128px;
+        background:linear-gradient(90deg,transparent,rgba(0,212,255,0.42),transparent);
+        border-top:3px solid var(--cyan); border-bottom:3px solid var(--cyan);
+        box-shadow:0 0 26px rgba(0,212,255,0.55); top:7px; }
+      .acol { top:7px; bottom:7px; width:128px;
+        background:linear-gradient(0deg,transparent,rgba(255,213,61,0.42),transparent);
+        border-left:3px solid var(--yellow); border-right:3px solid var(--yellow);
+        box-shadow:0 0 26px rgba(255,213,61,0.55); left:7px; }
+
+      /* S8 token buffer */
+      .tok-row { display:flex; gap:80px; align-items:center; }
+      .tokbuf {
+        background:var(--bg2); border:2px solid var(--dim); border-radius:12px;
+        padding:46px 40px; width:720px; position:relative; box-shadow:0 16px 60px rgba(0,0,0,0.45);
+      }
+      .tokbuf .hdr {
+        position:absolute; top:-20px; left:30px; background:var(--bg); padding:0 16px;
+        font-size:24px; color:var(--cyan); font-weight:800;
+      }
+      .tline { color:var(--mute); font-size:30px; line-height:2.0; white-space:nowrap; opacity:0; }
+      .tline .k { color:var(--purple); } .tline .c { color:var(--green); font-weight:800; }
+      .tline .n { color:var(--yellow); }
+      .tcur { display:inline-block; width:14px; height:30px; background:var(--green);
+        vertical-align:-4px; margin-left:8px; }
+
+      /* S9 reveal */
+      .reveal {
+        font-size:180px; color:var(--green); line-height:1.05; white-space:pre;
+        font-weight:800; letter-spacing:0.06em;
+        text-shadow:0 0 28px var(--green),0 0 60px var(--green),0 0 120px rgba(0,255,156,0.6);
+      }
+      .reveal-tag { margin-top:54px; color:var(--cyan); font-size:34px; letter-spacing:0.5em; opacity:0; }
+
+      /* progress dots */
+      .ind { position:absolute; bottom:34px; left:50%; transform:translateX(-50%);
+        display:flex; gap:11px; z-index:50; }
+      .dot { width:13px; height:13px; border-radius:50%; background:var(--dim); }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="root" data-start="0" data-duration="26" data-width="1920" data-height="1080">
+      <div id="stage" class="clip" data-start="0" data-duration="26" data-track-index="0">
+        <div class="bg-grid"></div>
+
+        <div class="scene" id="s1">
+          <div id="matrix"></div>
+          <div class="title-hero">
+            <div class="title-ascii"> /\___/\
+( o   o )
+ >  ^  &lt;</div>
+            <div class="title-text">ASCII ART</div>
+            <div class="title-sub">— HARD MODE —</div>
+          </div>
+        </div>
+
+        <div class="scene" id="s2">
+          <div class="easy-row" id="easyrow"></div>
+          <div class="easy-cap" id="easycap">output characters? &nbsp;trivial.</div>
+        </div>
+
+        <div class="scene" id="s3">
+          <div class="noimg-row">
+            <div class="img-frame"><div class="xb"></div><div class="xa"></div></div>
+            <div class="noimg-txt">
+              <div class="lab">// image input :</div>
+              <div class="val">&#8709;&nbsp;&nbsp;none</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="scene" id="s4">
+          <div class="neural-wrap">
+            <svg class="neural-svg" id="nn" viewBox="0 0 1100 560"></svg>
+            <div class="nn-chip">VISUAL&nbsp;REASONING</div>
+          </div>
+        </div>
+
+        <div class="scene" id="s5">
+          <div class="gwrap">
+            <div class="glabel">&#9656; 先想好整体轮廓</div>
+            <div class="board" id="g5"></div>
+          </div>
+        </div>
+
+        <div class="scene" id="s6">
+          <div class="gwrap">
+            <div class="glabel">&#9656; 把每个字符放到正确位置</div>
+            <div class="board" id="g6"></div>
+          </div>
+        </div>
+
+        <div class="scene" id="s7">
+          <div class="gwrap">
+            <div class="glabel">&#9656; 空间一致性 · 结构记忆</div>
+            <div class="gridfx">
+              <div class="board" id="g7"></div>
+              <div class="arow"></div><div class="acol"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="scene" id="s8">
+          <div class="tok-row">
+            <div class="tokbuf"><div class="hdr">&#9673; planning_buffer</div><div id="tokbody"></div></div>
+            <div class="board" id="g8"></div>
+          </div>
+        </div>
+
+        <div class="scene" id="s9">
+          <div style="display:flex;flex-direction:column;align-items:center">
+            <div class="reveal"> /\_/\
+( o.o )
+ &gt; ^ &lt;</div>
+            <div class="reveal-tag">&#9670; &#9670; &#9670;</div>
+          </div>
+        </div>
+
+        <div class="ind" id="ind"></div>
+      </div>
+    </div>
+
+    <!-- ===== deterministic DOM build ===== -->
+    <script>
+      (function build() {
+        // seeded PRNG (deterministic — no Math.random)
+        function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+        const rnd = mulberry32(20260519);
+        const POOL = "/\\(){}[]<>=+-*.,;:|^~_!?@#$%&01";
+
+        // matrix columns
+        const mx = document.getElementById("matrix");
+        const CW = 26, NCOL = Math.ceil(1920 / CW);
+        const mcols = [];
+        for (let i = 0; i < NCOL; i++) {
+          const col = document.createElement("div");
+          col.className = "mcol";
+          col.style.left = (i * CW) + "px";
+          const len = 26 + Math.floor(rnd() * 30);
+          let t = "";
+          for (let j = 0; j < len; j++) t += POOL[Math.floor(rnd() * POOL.length)] + "\n";
+          col.textContent = t;
+          col.style.opacity = (0.12 + rnd() * 0.4).toFixed(2);
+          mx.appendChild(col);
+          mcols.push({ el: col, dur: 4 + rnd() * 5, off: rnd() });
+        }
+
+        // cat grid 7x3
+        const CAT = [
+          [" ","/","\\","_","/","\\"," "],
+          ["("," ","o",".","o"," ",")"],
+          [" ",">"," ","^"," ","<"," "],
+        ];
+        function mkBoard(id, mode) {
+          const b = document.getElementById(id);
+          const cells = [];
+          for (let r = 0; r < 3; r++) for (let c = 0; c < 7; c++) {
+            const ch = CAT[r][c];
+            const d = document.createElement("div");
+            d.className = "gc";
+            if (ch !== " ") {
+              if (mode === "ghost") {
+                d.classList.add("ghost"); d.textContent = "?";
+                const tg = document.createElement("span");
+                tg.className = "ctag"; tg.textContent = r + "," + c;
+                d.appendChild(tg);
+              } else { d.classList.add("fill"); d.textContent = ch; }
+              cells.push(d);
+            }
+            b.appendChild(d);
+          }
+          return cells;
+        }
+        const g5 = mkBoard("g5", "ghost");
+        const g6 = mkBoard("g6", "ghost");   // flips to fill in S6
+        const g7 = mkBoard("g7", "fill");
+        const g8 = mkBoard("g8", "fill");
+        // S6 store target chars; drop coord tags (those belong to S5 only)
+        let gi = 0;
+        for (let r = 0; r < 3; r++) for (let c = 0; c < 7; c++) {
+          if (CAT[r][c] !== " ") { g6[gi].dataset.t = CAT[r][c]; gi++; }
+        }
+        g6.forEach((c) => { const t = c.querySelector(".ctag"); if (t) t.remove(); });
+
+        // easy tiles
+        const ER = document.getElementById("easyrow");
+        const ECH = ["/","\\","(","o",".",")","^"];
+        ECH.forEach((ch) => {
+          const t = document.createElement("div");
+          t.className = "easy-tile";
+          t.textContent = ch;
+          const tk = document.createElement("span");
+          tk.className = "tk"; tk.textContent = "✓";
+          t.appendChild(tk);
+          ER.appendChild(t);
+        });
+
+        // neural net
+        const svg = document.getElementById("nn");
+        const NS = "http://www.w3.org/2000/svg";
+        const L = [
+          [[140,150],[140,300],[140,450]],
+          [[420,90],[420,210],[420,330],[420,450],[420,520]],
+          [[700,90],[700,210],[700,330],[700,450],[700,520]],
+          [[960,150],[960,300],[960,450]],
+        ];
+        const nnLines = [], nnNodes = [];
+        for (let i = 0; i < L.length - 1; i++)
+          for (const a of L[i]) for (const b of L[i+1]) {
+            const ln = document.createElementNS(NS, "line");
+            ln.setAttribute("x1",a[0]); ln.setAttribute("y1",a[1]);
+            ln.setAttribute("x2",b[0]); ln.setAttribute("y2",b[1]);
+            ln.setAttribute("class","nn-line"); svg.appendChild(ln); nnLines.push(ln);
+          }
+        for (const layer of L) for (const n of layer) {
+          const c = document.createElementNS(NS,"circle");
+          c.setAttribute("cx",n[0]); c.setAttribute("cy",n[1]); c.setAttribute("r",9);
+          c.setAttribute("class","nn-node"); svg.appendChild(c); nnNodes.push(c);
+        }
+
+        // token buffer lines
+        const tb = document.getElementById("tokbody");
+        const toks = [];
+        for (let r = 0; r < 3; r++) for (let c = 0; c < 7; c++)
+          if (CAT[r][c] !== " ") toks.push({ ch: CAT[r][c], r, c });
+        toks.forEach((t, i) => {
+          const ln = document.createElement("div");
+          ln.className = "tline";
+          const dc = t.ch === "\\" ? "\\\\" : t.ch;
+          ln.innerHTML = '<span class="k">plan</span>[<span class="n">' +
+            String(i).padStart(2,"0") + '</span>] = (<span class="c">\'' + dc +
+            '\'</span>, row=<span class="n">' + t.r + '</span>, col=<span class="n">' +
+            t.c + '</span>)';
+          tb.appendChild(ln);
+        });
+        const cur = document.createElement("div");
+        cur.className = "tline";
+        cur.innerHTML = '<span class="k">plan</span>[<span class="n">..</span>] <span class="tcur" id="tcur"></span>';
+        tb.appendChild(cur);
+
+        // indicator dots
+        const ind = document.getElementById("ind");
+        for (let i = 0; i < 9; i++) { const d=document.createElement("div"); d.className="dot"; ind.appendChild(d); }
+
+        window.__a = { mcols, g5, g6, g7, g8, nnLines, nnNodes,
+          tlines: Array.prototype.slice.call(tb.querySelectorAll(".tline")),
+          dots: Array.prototype.slice.call(ind.children) };
+      })();
+    </script>
+
+    <!-- ===== GSAP timeline (all motion seek-safe; no CSS infinite anim) ===== -->
+    <script>
+      (function () {
+        window.__timelines = window.__timelines || {};
+        const tl = gsap.timeline({ paused: true });
+        const A = window.__a;
+        const D = 26;
+        // scene windows [start, end]
+        const SW = {
+          s1:[0.0,3.2], s2:[3.0,5.7], s3:[5.5,8.2], s4:[8.0,11.2],
+          s5:[11.0,13.6], s6:[13.4,17.8], s7:[17.6,20.2], s8:[20.0,23.6], s9:[23.4,26.0],
+        };
+        const ids = Object.keys(SW);
+        gsap.set(".scene", { opacity: 0 });
+
+        // scene crossfades + progress dots
+        ids.forEach((id, i) => {
+          const [s, e] = SW[id];
+          tl.to("#" + id, { opacity: 1, duration: 0.45, ease: "power1.out" }, s);
+          if (i < ids.length - 1)
+            tl.to("#" + id, { opacity: 0, duration: 0.45, ease: "power1.in" }, e);
+          tl.to(A.dots[i], { backgroundColor: "#00ff9c", width: 34, borderRadius: 5,
+            boxShadow: "0 0 12px #00ff9c", duration: 0.3 }, s);
+          if (i < ids.length - 1)
+            tl.to(A.dots[i], { backgroundColor: "#2a3441", width: 13, borderRadius: 50,
+              boxShadow: "0 0 0 rgba(0,0,0,0)", duration: 0.3 }, e);
+        });
+
+        // ---- S1 matrix + title ----
+        A.mcols.forEach((m) => {
+          const startY = -700 - m.off * 700;
+          gsap.set(m.el, { y: startY });
+          tl.to(m.el, { y: startY + 2400, duration: m.dur, ease: "none",
+            repeat: Math.ceil(3.2 / m.dur), }, 0);
+        });
+        tl.from(".title-ascii", { opacity: 0, y: 24, duration: 0.6, ease: "power2.out" }, 0.4);
+        tl.from(".title-text", { opacity: 0, scale: 0.8, duration: 0.6, ease: "back.out(1.7)" }, 0.7);
+        tl.from(".title-sub", { opacity: 0, letterSpacing: "0.9em", duration: 0.6, ease: "power2.out" }, 1.0);
+        tl.to(".title-text", { textShadow: "0 0 60px rgba(0,255,156,0.95)", duration: 0.9,
+          yoyo: true, repeat: 2, ease: "sine.inOut" }, 1.2);
+
+        // ---- S2 easy tiles ----
+        tl.to(".easy-tile", { opacity: 1, scale: 1, y: 0, duration: 0.5, ease: "back.out(1.8)",
+          stagger: 0.14, startAt: { y: 40, scale: 0.5 } }, 3.1);
+        tl.to(".easy-tile", { borderColor: "#00ff9c", duration: 0.3, stagger: 0.14 }, 3.25);
+        tl.to(".easy-tile .tk", { opacity: 1, scale: 1, duration: 0.3, ease: "back.out(2)",
+          stagger: 0.14, startAt: { scale: 0 } }, 3.5);
+        tl.fromTo("#easycap", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.5 }, 4.6);
+
+        // ---- S3 no image ----
+        tl.fromTo(".img-frame", { opacity: 0, scale: 0.9 },
+          { opacity: 1, scale: 1, duration: 0.5, ease: "back.out(1.5)" }, 5.6);
+        tl.to(".img-frame", { x: 7, duration: 0.05, repeat: 8, yoyo: true, ease: "none" }, 6.3);
+        tl.to(".xb", { scaleX: 1, duration: 0.4, ease: "back.out(1.6)" }, 6.4);
+        tl.to(".xa", { scaleX: 1, duration: 0.4, ease: "back.out(1.6)" }, 6.7);
+        tl.to(".noimg-txt .lab", { opacity: 1, duration: 0.4 }, 6.5);
+        tl.to(".noimg-txt .val", { opacity: 1, scale: 1, duration: 0.45, ease: "back.out(1.8)",
+          startAt: { scale: 0.7 } }, 6.9);
+
+        // ---- S4 neural ----
+        tl.to(A.nnLines, { opacity: 0.28, strokeDashoffset: 0, duration: 0.7,
+          ease: "power1.out", stagger: { each: 0.006, from: "start" } }, 8.2);
+        tl.to(A.nnNodes, { opacity: 1, duration: 0.35, ease: "back.out(2)",
+          stagger: { each: 0.03, from: "start" }, startAt: { scale: 0.2 } }, 8.5);
+        tl.to(A.nnNodes, { attr: { r: 12 }, duration: 0.7, yoyo: true, repeat: 3,
+          ease: "sine.inOut", stagger: { each: 0.02, from: "random" } }, 9.4);
+        tl.fromTo(".nn-chip", { opacity: 0, scale: 0.8 },
+          { opacity: 1, scale: 1, duration: 0.5, ease: "back.out(1.7)" }, 9.6);
+
+        // ---- S5 plan outline (ghost cells appear with coord tags) ----
+        tl.fromTo("#s5 .glabel", { opacity: 0, x: -16 },
+          { opacity: 1, x: 0, duration: 0.5, ease: "power2.out" }, 11.1);
+        tl.to(A.g5, { opacity: 1, duration: 0.4, ease: "power1.out",
+          stagger: { each: 0.05, from: "start" } }, 11.3);
+        tl.to(A.g5, { borderColor: "#00ff9c", duration: 0.5, yoyo: true, repeat: 1,
+          ease: "sine.inOut" }, 12.7);
+
+        // ---- S6 place each char (ghost → yellow flash → green fill) ----
+        tl.fromTo("#s6 .glabel", { opacity: 0, x: -16 },
+          { opacity: 1, x: 0, duration: 0.5, ease: "power2.out" }, 13.5);
+        tl.to(A.g6, { opacity: 1, duration: 0.3, stagger: { each: 0.02, from: "start" } }, 13.6);
+        A.g6.forEach((cell, i) => {
+          const at = 13.9 + i * 0.26;
+          tl.set(cell, { textContent: cell.dataset.t, className: "gc fill",
+            opacity: 1 }, at);
+          tl.fromTo(cell,
+            { backgroundColor: "#ffd93d", color: "#0a0e14", scale: 1.16, opacity: 1 },
+            { backgroundColor: "#131922", color: "#00ff9c", scale: 1, opacity: 1,
+              duration: 0.42, ease: "power2.out", immediateRender: false }, at);
+        });
+
+        // ---- S7 spatial alignment scan ----
+        tl.fromTo("#s7 .glabel", { opacity: 0, x: -16 },
+          { opacity: 1, x: 0, duration: 0.5, ease: "power2.out" }, 17.7);
+        tl.to(A.g7, { opacity: 1, duration: 0.3, stagger: 0.015 }, 17.7);
+        // cyan row bar steps through 3 rows
+        tl.fromTo(".arow", { opacity: 0, top: 7 }, { opacity: 1, duration: 0.25 }, 18.0);
+        tl.to(".arow", { top: 142, duration: 0.35, ease: "power2.inOut" }, 18.5);
+        tl.to(".arow", { top: 277, duration: 0.35, ease: "power2.inOut" }, 19.0);
+        tl.to(".arow", { opacity: 0, duration: 0.3 }, 19.6);
+        // yellow column bar sweeps across
+        tl.fromTo(".acol", { opacity: 0, left: 7 }, { opacity: 1, duration: 0.25 }, 18.2);
+        tl.to(".acol", { left: 817, duration: 1.3, ease: "power1.inOut" }, 18.5);
+        tl.to(".acol", { opacity: 0, duration: 0.3 }, 19.7);
+        tl.to("#g7", { filter: "drop-shadow(0 0 16px rgba(0,212,255,0.5))",
+          duration: 0.8, ease: "power2.out" }, 18.4);
+
+        // ---- S8 token planning buffer ----
+        tl.to(A.g8, { opacity: 1, duration: 0.3, stagger: 0.012 }, 20.1);
+        tl.to(A.tlines, { opacity: 1, x: 0, duration: 0.3, ease: "power2.out",
+          stagger: { each: 0.2, from: "start" }, startAt: { x: -12 } }, 20.2);
+        tl.to("#tcur", { opacity: 0, duration: 0.4, repeat: 7, yoyo: true,
+          ease: "steps(1)" }, 22.0);
+        tl.to("#g8", { filter: "drop-shadow(0 0 18px rgba(0,255,156,0.5))",
+          duration: 0.9, ease: "power2.out" }, 22.4);
+
+        // ---- S9 reveal ----
+        tl.from(".reveal", { opacity: 0, scale: 0.7, duration: 0.7, ease: "back.out(1.6)" }, 23.5);
+        tl.to(".reveal", {
+          textShadow: "0 0 36px #00ff9c,0 0 72px #00ff9c,0 0 150px rgba(0,255,156,0.9)",
+          scale: 1.03, duration: 1.1, yoyo: true, repeat: 1, ease: "sine.inOut",
+        }, 23.9);
+        tl.fromTo(".reveal-tag", { opacity: 0, letterSpacing: "1em" },
+          { opacity: 0.85, letterSpacing: "0.5em", duration: 0.7, ease: "power2.out" }, 24.4);
+
+        window.__timelines["root"] = tl;
+      })();
+    </script>
+  </body>
+</html>
