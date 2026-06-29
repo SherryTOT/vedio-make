@@ -11,6 +11,8 @@
     "plan": "tsx src/cli.ts plan",
     "storyboard": "tsx src/cli.ts storyboard",
     "render": "tsx src/cli.ts render",
+    "serve": "tsx src/cli.ts serve --projects ./projects",
+    "board": "tsx src/cli.ts serve --projects ./projects",
     "clean": "node -e \"const fs=require('fs'),p='output';if(fs.existsSync(p))for(const f of fs.readdirSync(p))fs.rmSync(require('path').join(p,f),{recursive:true,force:true})\""
   },
   "engines": {

@@ -13,7 +13,13 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { Scene } from "../types.ts";
+import type { Scene, ResolvedDesign } from "../types.ts";
+import { resolveDesign } from "./designs.ts";
+
+// Legacy default for methods not yet ported to ctx.design (= inkwork preset).
+// resolveDesign(undefined) returns inkwork tokens incl. terra/terra2 aliases,
+// so existing BRAND token reads keep compiling. Remove once all read ctx.design.
+const BRAND = resolveDesign(undefined);
 
 /** Look up the first generated bg image in scene.assets and return its absolute path. */
 function pickGeneratedBg(scene: Scene): { rel: string; absPath: string } | null {
@@ -138,6 +144,8 @@ export interface RenderContext {
   fps: number;
   /** Project root, used to resolve asset paths */
   projectRoot: string;
+  /** Resolved style tokens for THIS scene (project preset + per-scene override). */
+  design: ResolvedDesign;
 }
 
 export type RenderOutput =
@@ -190,13 +198,15 @@ const hfCssFade: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #050308; color: #f4ead0; font-family: -apple-system, "PingFang SC", "Source Han Sans SC", sans-serif; }
-  #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 0 120px; gap: 18px; }
-  .bg { position: absolute; inset: 0; background: radial-gradient(ellipse at center, rgba(80,40,140,0.18) 0%, rgba(0,0,0,0) 60%), linear-gradient(180deg, #0a0612 0%, #050308 100%); }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #f6f5f1; color: #1b1612; font-family: "Noto Serif SC", "Songti SC", "PingFang SC", serif; -webkit-font-smoothing: antialiased; }
+  #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 0 130px; gap: 16px; }
+  .bg { position: absolute; inset: 0; background: #f6f5f1; }
+  .kicker { position: absolute; left: 130px; top: ${Math.round(ctx.height * 0.16)}px; display: flex; align-items: center; gap: 16px; font-family: "Noto Sans SC", -apple-system, sans-serif; font-size: ${Math.round(ctx.height * 0.017)}px; font-weight: 700; letter-spacing: 0.26em; color: #9e5326; }
+  .kicker .bar { display: inline-block; width: 52px; height: 3px; background: #c36c36; transform-origin: 0 50%; }
   ${bgImage ? `.bg-img { position: absolute; inset: 0; background-image: url('bg.png'); background-size: cover; background-position: center; opacity: 0.55; filter: saturate(0.85) brightness(0.7); will-change: transform; } .bg-veil { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(5,3,8,0.4) 0%, rgba(5,3,8,0.78) 100%); z-index: 1; }` : ""}
   ${fg ? `.fg-img { position: absolute; left: 12%; top: 18%; width: 56%; height: 64%; background-image: url('fg.png'); background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 2; filter: drop-shadow(0 20px 40px rgba(0,0,0,0.5)); }` : ""}
   ${focusOverlay.css}
-  .line { position: relative; font-size: 56px; line-height: 1.35; letter-spacing: 0.04em; text-align: center; opacity: 0; max-width: ${ctx.width - 240}px; text-shadow: 0 2px 14px rgba(0,0,0,0.6); z-index: 3; }
+  .line { position: relative; font-size: 62px; font-weight: 600; line-height: 1.55; letter-spacing: 0.01em; text-align: left; color: #1b1612; opacity: 0; max-width: ${ctx.width - 260}px; z-index: 3; }
 </style>
 </head>
 <body>
@@ -204,10 +214,12 @@ const hfCssFade: MethodRenderer = (scene, ctx) => {
   ${bgImage ? `<div class="bg-img" data-layout-ignore></div><div class="bg-veil" data-layout-ignore></div>` : `<div class="bg" data-layout-ignore></div>`}
   ${fg ? `<div class="fg-img" data-layout-ignore></div>` : ""}
   ${focusOverlay.html}
+  <div class="kicker" data-layout-ignore><span class="bar" id="kbar"></span><span>镜 ${String(scene.index).padStart(2, "0")}</span></div>
   ${safeLines}
   <script>
     window.__timelines = window.__timelines || {};
     const tl = gsap.timeline({ paused: true });
+    tl.fromTo("#kbar", { scaleX: 0, transformOrigin: "0 50%" }, { scaleX: 1, duration: Math.min(0.5, ${scene.durationSec} * 0.3), ease: "power3.out" }, 0.05);
     const lines = document.querySelectorAll(".line");
     lines.forEach((el, i) => {
       tl.fromTo(el, { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: Math.min(0.55, ${scene.durationSec} * 0.4), ease: "power3.out" }, 0.05 + i * Math.min(0.18, ${scene.durationSec} * 0.15));
@@ -226,10 +238,9 @@ const hfCssFade: MethodRenderer = (scene, ctx) => {
 // hf-kinetic-text — GSAP kinetic text for short hero phrases
 // ──────────────────────────────────────────────────────────────────────────
 const hfKineticText: MethodRenderer = (scene, ctx) => {
-  const segments = scene.text
-    .split(/[\s、，,。.·]+/)
+  const segments = (scene.text.replace(/\s+/g, " ").trim().match(/[A-Za-z0-9]+|[一-鿿]|[^\sA-Za-z0-9]/g) ?? [])
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter((s) => s && !/^[，。、！？；：·,.]$/.test(s));
 
   const wordEls = segments
     .map((seg, i) => `<span class="w" data-i="${i}">${escapeHtml(seg)}</span>`)
@@ -252,14 +263,14 @@ const hfKineticText: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #050308; color: #f4ead0; font-family: -apple-system, "PingFang SC", "Source Han Sans SC", sans-serif; }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #f6f5f1; color: #1b1612; font-family: "Noto Serif SC", "Songti SC", "PingFang SC", serif; -webkit-font-smoothing: antialiased; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; align-items: center; justify-content: center; }
-  .bg { position: absolute; inset: 0; background: radial-gradient(ellipse at 30% 60%, rgba(80,40,140,0.28) 0%, rgba(0,0,0,0) 55%), linear-gradient(180deg, #0a0612 0%, #050308 100%); }
+  .bg { position: absolute; inset: 0; background: #f6f5f1; }
   ${bgImage ? `.bg-img { position: absolute; inset: 0; background-image: url('bg.png'); background-size: cover; background-position: center; opacity: 0.92; filter: saturate(1.0) brightness(0.92) contrast(1.05); will-change: transform; } .bg-veil { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 60%, rgba(0,0,0,0.0) 30%, rgba(5,3,8,0.55) 95%); z-index: 1; }` : ""}
   ${fg ? `.fg-img { position: absolute; left: 60%; top: 12%; width: 36%; height: 76%; background-image: url('fg.png'); background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 2; filter: drop-shadow(0 24px 48px rgba(0,0,0,0.6)); }` : ""}
   ${focusOverlay.css}
-  .stage { display: flex; flex-wrap: wrap; gap: 22px 36px; padding: 0 140px; justify-content: center; max-width: ${ctx.width - 200}px; position: relative; z-index: 3; }
-  .w { font-size: 96px; font-weight: 500; letter-spacing: 0.04em; line-height: 1.1; opacity: 0; transform-origin: 50% 100%; background: linear-gradient(180deg, #f4d479 0%, #c98f2e 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; filter: drop-shadow(0 4px 18px rgba(244,212,121,0.35)); }
+  .stage { display: flex; flex-wrap: wrap; gap: 8px 4px; padding: 0 120px; justify-content: center; max-width: ${ctx.width - 200}px; position: relative; z-index: 3; }
+  .w { font-size: 110px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.14; opacity: 0; transform-origin: 50% 100%; color: #1b1612; }
 </style>
 </head>
 <body>
@@ -275,7 +286,7 @@ const hfKineticText: MethodRenderer = (scene, ctx) => {
     const tl = gsap.timeline({ paused: true });
     const words = document.querySelectorAll(".w");
     words.forEach((el, i) => {
-      tl.fromTo(el, { opacity: 0, y: 80, rotationX: -45, scale: 0.85 }, { opacity: 1, y: 0, rotationX: 0, scale: 1, duration: Math.min(0.6, ${scene.durationSec} * 0.45), ease: "back.out(1.7)" }, 0.05 + i * Math.min(0.14, ${scene.durationSec} * 0.12));
+      tl.fromTo(el, { opacity: 0, y: 34 }, { opacity: 1, y: 0, duration: Math.min(0.5, ${scene.durationSec} * 0.4), ease: "power3.out" }, 0.06 + i * Math.min(0.07, ${scene.durationSec} * 0.05));
     });
     ${motionScript}
     // No fade-out — concat between scenes is the cut.
@@ -337,8 +348,8 @@ export const Scene: React.FC<Props> = ({ title, data }) => {
 
   return (
     <AbsoluteFill style={{
-      background: "radial-gradient(ellipse at 30% 20%, rgba(80,40,140,0.28) 0%, rgba(40,18,70,0.10) 35%, rgba(0,0,0,0) 65%), linear-gradient(180deg, #0a0612 0%, #02010a 100%)",
-      color: "#f4ead0",
+      background: "${ctx.design.paper}",
+      color: "${ctx.design.ink}",
       fontFamily: "-apple-system, 'PingFang SC', 'Source Han Sans SC', sans-serif",
     }}>
       <div style={{
@@ -359,13 +370,13 @@ export const Scene: React.FC<Props> = ({ title, data }) => {
             return (
               <g key={d.label} transform={\`translate(\${x(d.label)},0)\`}>
                 <rect x={0} y={barY} width={x.bandwidth()} height={barH} rx={4}
-                  fill={d.value === yMax ? "url(#gradPeak)" : "url(#gradBar)"}
+                  fill={d.value === yMax ? "${ctx.design.accent}" : "${ctx.design.accent2}"}
                   style={{ transformOrigin: \`50% \${chartH}px\`, transform: \`scaleY(\${landScale < 1 ? 1 + (1 - landScale) * 0.05 : 1})\` }}
                 />
-                <text x={x.bandwidth() / 2} y={barY - 14} textAnchor="middle" fill={d.value === yMax ? "#f4d479" : "#f4ead0"} fontSize="36" fontWeight="500" opacity={progress} fontFamily="-apple-system, ui-monospace, monospace">
+                <text x={x.bandwidth() / 2} y={barY - 14} textAnchor="middle" fill={d.value === yMax ? "${ctx.design.accent}" : "${ctx.design.ink}"} fontSize="36" fontWeight="500" opacity={progress} fontFamily="-apple-system, ui-monospace, monospace">
                   {(d.value * progress).toFixed(1)}
                 </text>
-                <text x={x.bandwidth() / 2} y={chartH + 40} textAnchor="middle" fill="rgba(244,234,208,0.55)" fontSize="22" letterSpacing="0.12em" opacity={progress}>
+                <text x={x.bandwidth() / 2} y={chartH + 40} textAnchor="middle" fill="${ctx.design.muted}" fontSize="22" letterSpacing="0.12em" opacity={progress}>
                   {d.label}
                 </text>
               </g>
@@ -419,21 +430,20 @@ const hfAnimeScatter: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #050308; color: #f4ead0; font-family: -apple-system, "PingFang SC", "Source Han Sans SC", sans-serif; }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #f6f5f1; color: #1b1612; font-family: "Noto Serif SC", "Songti SC", "PingFang SC", serif; -webkit-font-smoothing: antialiased; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; align-items: center; justify-content: center; }
-  .bg { position: absolute; inset: 0; background: radial-gradient(ellipse at 30% 70%, rgba(80,40,140,0.28) 0%, rgba(0,0,0,0) 55%), linear-gradient(180deg, #0a0612 0%, #050308 100%); }
+  .bg { position: absolute; inset: 0; background: #f6f5f1; }
   ${bgImage ? `.bg-img { position: absolute; inset: 0; background-image: url('bg.png'); background-size: cover; background-position: center; opacity: 0.45; filter: saturate(0.7) brightness(0.6); will-change: transform; } .bg-veil { position: absolute; inset: 0; background: radial-gradient(ellipse at 30% 70%, rgba(0,0,0,0.15) 0%, rgba(5,3,8,0.78) 75%); z-index: 1; }` : ""}
   ${fg ? `.fg-img { position: absolute; left: 70%; top: 14%; width: 26%; height: 72%; background-image: url('fg.png'); background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 2; filter: drop-shadow(0 18px 38px rgba(0,0,0,0.5)); }` : ""}
   ${focusOverlay.css}
   .grid { display: flex; flex-wrap: wrap; gap: 18px 22px; padding: 0 140px; justify-content: center; max-width: ${ctx.width - 200}px; position: relative; z-index: 3; }
   .tile {
-    padding: 14px 28px; font-size: 36px; letter-spacing: 0.06em;
-    background: rgba(212,166,74,0.07);
-    border: 1px solid rgba(212,166,74,0.5);
-    border-radius: 8px; color: #f4d479;
+    padding: 16px 30px; font-size: 44px; font-weight: 600; letter-spacing: 0.02em;
+    background: #ffffff; color: #1b1612;
+    border: 1px solid rgba(27,22,18,0.14);
+    border-left: 3px solid #c36c36;
+    border-radius: 4px;
     opacity: 0;
-    text-shadow: 0 0 18px rgba(212,166,74,0.35);
-    backdrop-filter: blur(4px);
   }
 </style>
 </head>
@@ -490,30 +500,27 @@ const hfWaapiMarker: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #050308; color: #f4ead0; font-family: -apple-system, "PingFang SC", "Source Han Sans SC", sans-serif; }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #f6f5f1; color: #1b1612; font-family: "Noto Serif SC", "Songti SC", "PingFang SC", serif; -webkit-font-smoothing: antialiased; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; align-items: center; justify-content: center; }
-  .bg { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 50%, rgba(120,70,30,0.22) 0%, rgba(0,0,0,0) 55%), linear-gradient(180deg, #0a0612 0%, #050308 100%); }
+  .bg { position: absolute; inset: 0; background: #f6f5f1; }
   ${bgImage ? `.bg-img { position: absolute; inset: 0; background-image: url('bg.png'); background-size: cover; background-position: center; opacity: 0.45; filter: saturate(0.8) brightness(0.55); will-change: transform; } .bg-veil { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 55%, rgba(0,0,0,0.1) 0%, rgba(5,3,8,0.82) 70%); z-index: 1; }` : ""}
   ${fg ? `.fg-img { position: absolute; left: 16%; top: 10%; width: 28%; height: 80%; background-image: url('fg.png'); background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 2; filter: drop-shadow(0 22px 44px rgba(0,0,0,0.6)); }` : ""}
   ${focusOverlay.css}
   .phrase {
-    position: relative; padding: 12px 16px;
-    font-size: 76px; font-weight: 500; letter-spacing: 0.04em;
-    color: #f4ead0; line-height: 1.2;
+    position: relative; padding: 12px 18px;
+    font-size: 86px; font-weight: 700; letter-spacing: 0.02em;
+    color: #1b1612; line-height: 1.28;
     max-width: ${ctx.width - 240}px; text-align: center;
     opacity: 0;
     z-index: 3;
-    text-shadow: 0 2px 16px rgba(0,0,0,0.7);
   }
   .marker {
-    position: absolute; left: 0; bottom: 8px;
-    height: 28px; width: 0%;
-    background: linear-gradient(90deg, rgba(244,212,121,0.45) 0%, rgba(244,212,121,0.85) 100%);
+    position: absolute; left: 0; bottom: 12px;
+    height: 26px; width: 0%;
+    background: rgba(195,108,54,0.30);
     z-index: -1;
     transform-origin: 0 50%;
-    mix-blend-mode: screen;
-    border-radius: 4px;
-    filter: blur(0.5px);
+    border-radius: 2px;
   }
 </style>
 </head>
@@ -553,7 +560,7 @@ const hfWaapiMarker: MethodRenderer = (scene, ctx) => {
 // rm-d3-line-trend — D3 timeseries line chart (Remotion)
 // ──────────────────────────────────────────────────────────────────────────
 const rmD3LineTrend: MethodRenderer = (scene, ctx) => {
-  const PALETTE = ["#f4d479", "#d4a64a", "#9b6cff", "#5fc4f4", "#ff8c5a", "#7fff8c"];
+  const PALETTE = [ctx.design.accent, ctx.design.ink, ctx.design.accent2, ctx.design.muted, "#3f8f5e", "#c9a05e"];
   const real = scene.data?.years && scene.data.series;
   const data = real
     ? {
@@ -602,8 +609,8 @@ export const Scene: React.FC<Props> = ({ title, data }) => {
   // Draw lines: each series animates its path stroke-dashoffset from full to 0
   return (
     <AbsoluteFill style={{
-      background: "radial-gradient(ellipse at 30% 20%, rgba(80,40,140,0.28) 0%, rgba(40,18,70,0.10) 35%, rgba(0,0,0,0) 65%), linear-gradient(180deg, #0a0612 0%, #02010a 100%)",
-      color: "#f4ead0",
+      background: "${ctx.design.paper}",
+      color: "${ctx.design.ink}",
       fontFamily: "-apple-system, 'PingFang SC', sans-serif",
     }}>
       <div style={{
@@ -616,8 +623,8 @@ export const Scene: React.FC<Props> = ({ title, data }) => {
         {/* Y gridlines */}
         {y.ticks(4).map((tick) => (
           <g key={tick} transform={\`translate(\${marginX},\${marginTop + y(tick)})\`}>
-            <line x2={chartW} stroke="rgba(244,234,208,0.12)" strokeDasharray="6 8" />
-            <text x={-16} y={6} fill="rgba(244,234,208,0.45)" fontSize={18} textAnchor="end" fontVariantNumeric="tabular-nums">
+            <line x2={chartW} stroke="${ctx.design.line}" strokeDasharray="6 8" />
+            <text x={-16} y={6} fill="${ctx.design.muted}" fontSize={18} textAnchor="end" fontVariantNumeric="tabular-nums">
               {tick.toFixed(1)}M
             </text>
           </g>
@@ -625,7 +632,7 @@ export const Scene: React.FC<Props> = ({ title, data }) => {
         {/* X labels */}
         {data.years.map((yr) => (
           <text key={yr} x={marginX + (x(yr) ?? 0)} y={marginTop + chartH + 36}
-            fill="rgba(244,234,208,0.55)" fontSize={20} textAnchor="middle" letterSpacing="0.12em">{yr}</text>
+            fill="${ctx.design.muted}" fontSize={20} textAnchor="middle" letterSpacing="0.12em">{yr}</text>
         ))}
 
         <g transform={\`translate(\${marginX},\${marginTop})\`}>
@@ -651,8 +658,7 @@ export const Scene: React.FC<Props> = ({ title, data }) => {
                   </clipPath>
                 </defs>
                 <path d={path} fill="none" stroke={s.color} strokeWidth={4} strokeLinecap="round"
-                      clipPath={\`url(#clip-\${si})\`}
-                      style={{ filter: si === 2 ? \`drop-shadow(0 0 18px \${s.color})\` : \`drop-shadow(0 0 8px \${s.color}80)\` }} />
+                      clipPath={\`url(#clip-\${si})\`} />
                 {/* End-cap dot at current line tip */}
                 {s.values.map((v, i) => {
                   const px = x(data.years[i]) ?? 0;
@@ -670,7 +676,7 @@ export const Scene: React.FC<Props> = ({ title, data }) => {
             );
           })}
           {/* Baseline axis */}
-          <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke="rgba(212,166,74,0.4)" />
+          <line x1={0} y1={chartH} x2={chartW} y2={chartH} stroke="${ctx.design.line}" />
         </g>
       </svg>
     </AbsoluteFill>
@@ -720,8 +726,8 @@ export const Scene: React.FC<Props> = ({ heading, items }) => {
 
   return (
     <AbsoluteFill style={{
-      background: "radial-gradient(ellipse at 30% 30%, rgba(80,40,140,0.30) 0%, rgba(40,18,70,0.10) 40%, rgba(0,0,0,0) 70%), linear-gradient(180deg, #0a0612 0%, #02010a 100%)",
-      color: "#f4ead0",
+      background: "${ctx.design.paper}",
+      color: "${ctx.design.ink}",
       fontFamily: "-apple-system, 'PingFang SC', sans-serif",
     }}>
       {heading && (
@@ -757,13 +763,10 @@ export const Scene: React.FC<Props> = ({ heading, items }) => {
             transform: \`rotate(\${rot}deg) scale(\${0.85 + s * 0.15})\`,
             opacity: op,
             borderRadius: 16,
-            background: isMiddle
-              ? "linear-gradient(180deg, rgba(244,212,121,0.18) 0%, rgba(120,70,30,0.20) 100%)"
-              : "linear-gradient(180deg, rgba(58,29,109,0.35) 0%, rgba(10,6,18,0.6) 100%)",
-            border: \`1px solid \${isMiddle ? "rgba(244,212,121,0.55)" : "rgba(212,166,74,0.30)"}\`,
-            boxShadow: isMiddle
-              ? "0 24px 60px rgba(212,166,74,0.30), inset 0 1px 0 rgba(244,212,121,0.30)"
-              : "0 24px 50px rgba(0,0,0,0.5), inset 0 1px 0 rgba(244,212,121,0.18)",
+            background: "${ctx.design.pw}",
+            border: \`1px solid ${ctx.design.line}\`,
+            borderLeft: \`4px solid \${isMiddle ? "${ctx.design.accent}" : "${ctx.design.accent2}"}\`,
+            boxShadow: "none",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
@@ -771,16 +774,12 @@ export const Scene: React.FC<Props> = ({ heading, items }) => {
             gap: 20,
           }}>
             <div style={{
-              fontSize: 22, color: isMiddle ? "#f4d479" : "rgba(212,166,74,0.7)",
+              fontSize: 22, color: isMiddle ? "${ctx.design.accent}" : "${ctx.design.muted}",
               letterSpacing: "0.32em",
             }}>· {String(i + 1).padStart(2, "0")} ·</div>
             <div style={{
-              fontSize: 80, fontWeight: 500, letterSpacing: "0.06em",
-              background: isMiddle
-                ? "linear-gradient(180deg, #f4d479 0%, #b87f1f 100%)"
-                : "linear-gradient(180deg, #f4d479 0%, #a07020 100%)",
-              WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
-              backgroundClip: "text",
+              fontSize: 80, fontWeight: 600, letterSpacing: "0.06em",
+              color: isMiddle ? "${ctx.design.accent}" : "${ctx.design.ink}",
             }}>{label}</div>
           </div>
         );
@@ -862,7 +861,7 @@ export const Scene: React.FC<Props> = ({ title, startScale, endScale, fromX, toX
       <div style={{
         position: "absolute", left: 0, right: 0, bottom: "12%",
         textAlign: "center", fontSize: 64, fontWeight: 500, letterSpacing: "0.04em",
-        color: "#f4ead0", textShadow: "0 4px 22px rgba(0,0,0,0.7)",
+        color: "${ctx.design.ink}", textShadow: "0 4px 22px rgba(0,0,0,0.7)",
         opacity: titleOpacity, transform: \`translateY(\${titleY}px)\`,
         padding: "0 120px",
       }}>{title}</div>
@@ -929,11 +928,11 @@ const hfLottiePlay: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #050308; color: #f4ead0; font-family: -apple-system, "PingFang SC", sans-serif; }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: ${ctx.design.paper}; color: ${ctx.design.ink}; font-family: ${ctx.design.sans}; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 36px; }
-  .bg { position: absolute; inset: 0; background: radial-gradient(ellipse at center, rgba(80,40,140,0.20) 0%, rgba(0,0,0,0) 60%), linear-gradient(180deg, #0a0612 0%, #050308 100%); }
+  .bg { position: absolute; inset: 0; background: ${ctx.design.paper}; }
   #stage { width: 60%; height: 60%; opacity: 0; }
-  .caption { font-size: 40px; letter-spacing: 0.04em; color: #f4ead0; text-shadow: 0 2px 14px rgba(0,0,0,0.5); opacity: 0; text-align: center; max-width: 80%; }
+  .caption { font-size: 40px; letter-spacing: 0.04em; color: ${ctx.design.ink}; opacity: 0; text-align: center; max-width: 80%; }
 </style>
 </head>
 <body>
@@ -993,26 +992,26 @@ const hfTailwindCard: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #050308; font-family: -apple-system, "PingFang SC", sans-serif; }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: ${ctx.design.paper}; font-family: ${ctx.design.sans}; }
 </style>
 </head>
 <body class="text-cream">
 <div id="root" data-composition-id="main" data-start="0" data-duration="${scene.durationSec}" data-width="${ctx.width}" data-height="${ctx.height}"
      style="position: relative; width:${ctx.width}px; height:${ctx.height}px; display:flex; align-items:center; justify-content:center;">
   <div class="absolute inset-0" data-layout-ignore
-       style="background: radial-gradient(ellipse at 30% 70%, rgba(80,40,140,0.30) 0%, rgba(0,0,0,0) 60%), linear-gradient(180deg, #0a0612 0%, #050308 100%);"></div>
+       style="background: ${ctx.design.paper};"></div>
   <div id="card"
-       class="relative rounded-2xl p-16 backdrop-blur-md"
+       class="relative rounded-2xl p-16"
        style="width: 920px; min-height: 480px;
-              background: linear-gradient(180deg, rgba(244,212,121,0.10) 0%, rgba(120,70,30,0.18) 100%);
-              border: 1px solid rgba(244,212,121,0.45);
-              box-shadow: 0 30px 80px rgba(0,0,0,0.6), inset 0 1px 0 rgba(244,212,121,0.32);
+              background: ${ctx.design.pw};
+              border: 1px solid ${ctx.design.line};
+              border-left: 4px solid ${ctx.design.accent};
               opacity: 0;">
-    <div class="text-xs tracking-[0.32em] uppercase mb-6" style="color: rgba(212,166,74,0.78);">FEATURE</div>
-    <div id="head" class="text-7xl font-medium leading-tight" style="color: transparent; background: linear-gradient(180deg, #f4d479 0%, #c98f2e 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">
+    <div class="text-xs tracking-[0.32em] uppercase mb-6" style="color: ${ctx.design.accent2};">FEATURE</div>
+    <div id="head" class="text-7xl font-medium leading-tight" style="color: ${ctx.design.ink};">
       ${escapeHtml(heading)}
     </div>
-    ${detail ? `<div id="sub" class="text-2xl mt-8 leading-relaxed max-w-3xl" style="color: rgba(244,234,208,0.78);">${escapeHtml(detail)}</div>` : ""}
+    ${detail ? `<div id="sub" class="text-2xl mt-8 leading-relaxed max-w-3xl" style="color: ${ctx.design.ink2};">${escapeHtml(detail)}</div>` : ""}
   </div>
   <script>
     window.__timelines = window.__timelines || {};
@@ -1108,14 +1107,14 @@ const hfPosterHero: MethodRenderer = (scene, ctx) => {
   .caption {
     font-size: 22px;
     letter-spacing: 0.42em;
-    color: rgba(212, 166, 74, 0.92);
+    color: ${ctx.design.accent};
     text-transform: uppercase;
     font-weight: 500;
     text-shadow: 0 1px 8px rgba(0,0,0,0.7);
   }
   .rule {
     width: 96px; height: 1px;
-    background: linear-gradient(90deg, rgba(212,166,74,0.9), rgba(212,166,74,0.15));
+    background: ${ctx.design.accent};
   }
   .hero {
     font-family: "Noto Serif SC", "PingFang SC", "Songti SC", serif;
@@ -1123,12 +1122,8 @@ const hfPosterHero: MethodRenderer = (scene, ctx) => {
     font-size: 168px;
     line-height: 1.0;
     letter-spacing: 0.04em;
-    background: linear-gradient(180deg, #f7dd89 0%, #e6b754 45%, #b78224 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    text-shadow: 0 2px 22px rgba(244,212,121,0.22);
-    filter: drop-shadow(0 8px 36px rgba(0,0,0,0.55));
+    color: #f7f4ee;
+    text-shadow: 0 2px 14px rgba(0,0,0,0.5);
     white-space: nowrap;
   }
   .subtitle {
@@ -1286,10 +1281,8 @@ const hfMountainReveal: MethodRenderer = (scene, ctx) => {
     font-size: 150px;
     line-height: 1.0;
     letter-spacing: 0.05em;
-    background: linear-gradient(180deg, #ffe9a8 0%, #f0c463 42%, #c98e2c 100%);
-    -webkit-background-clip: text; background-clip: text;
-    -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 6px 26px rgba(0,0,0,0.6)) drop-shadow(0 0 30px rgba(255,190,110,0.28));
+    color: #f7f4ee;
+    filter: drop-shadow(0 4px 18px rgba(0,0,0,0.55));
     white-space: nowrap;
   }
   /* Layer 3 — drifting mist that softens the occlusion seam */
@@ -1427,7 +1420,7 @@ const hfMountainReveal: MethodRenderer = (scene, ctx) => {
 // ──────────────────────────────────────────────────────────────────────────
 const hfLineReveal: MethodRenderer = (scene, ctx) => {
   const W = ctx.width, H = ctx.height;
-  const PALETTE = ["#1fa996", "#7b62d4", "#ef6f4e", "#3f7fd0", "#e6a52e"];
+  const PALETTE = [ctx.design.accent, "#1b1612", "#8a8174", ctx.design.accent2, "#3f8f5e"];
   const hasData = scene.data?.years && scene.data?.series;
   const years: string[] = hasData
     ? scene.data!.years!.map(String)
@@ -1511,26 +1504,24 @@ const hfLineReveal: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${W}px; height: ${H}px; overflow: hidden; background: #0e131c; font-family: "Noto Sans SC", -apple-system, "PingFang SC", sans-serif; }
+  html, body { width: ${W}px; height: ${H}px; overflow: hidden; background: ${ctx.design.paper}; font-family: ${ctx.design.sans}; }
   #root { position: relative; width: ${W}px; height: ${H}px; }
   /* Dark backdrop with a faded sepia b-roll bleed on the far left (mirrors ref framing) */
-  .backdrop { position: absolute; inset: 0; background:
-      linear-gradient(90deg, rgba(120,96,64,0.30) 0%, rgba(20,24,32,0.0) 22%),
-      radial-gradient(ellipse at 60% 40%, #1b2230 0%, #0c1018 70%); }
+  .backdrop { position: absolute; inset: 0; background: ${ctx.design.paper}; }
   .card {
     position: absolute; left: 70px; top: 56px; width: ${W - 140}px; height: ${H - 112}px;
-    background: #ffffff; border-radius: 24px;
-    box-shadow: 0 40px 90px rgba(0,0,0,0.55);
+    background: #ffffff; border-radius: 18px;
+    border: 1px solid ${ctx.design.line};
     overflow: hidden;
   }
   .titleblk { position: absolute; left: 0; right: 0; top: 70px; text-align: center; }
   .t-hl { position: relative; display: inline-block; padding: 6px 22px; }
   .t-hl .bar {
     position: absolute; left: 0; right: 0; bottom: 8px; height: 26px;
-    background: rgba(63,127,208,0.22); border-radius: 6px; z-index: 0;
+    background: color-mix(in srgb, ${ctx.design.accent} 22%, transparent); border-radius: 4px; z-index: 0;
     transform: scaleX(0); transform-origin: 0 50%;
   }
-  .t-hl span.tx { position: relative; z-index: 1; font-size: 60px; font-weight: 900; color: #1d2735; letter-spacing: 0.02em; }
+  .t-hl span.tx { position: relative; z-index: 1; font-size: 60px; font-weight: 700; color: #1b1612; letter-spacing: 0.02em; }
   .t-sub { margin-top: 12px; font-size: 22px; font-weight: 600; letter-spacing: 0.34em; color: #9aa1ad; }
   .legend { position: absolute; left: 0; right: 0; top: 232px; text-align: center; }
   .chip {
@@ -1630,28 +1621,23 @@ const hfChapterCard: MethodRenderer = (scene, ctx) => {
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden;
-    background: #04050a; color: #fff;
-    font-family: -apple-system, "PingFang SC", "Source Han Sans SC", sans-serif; }
+    background: ${ctx.design.paper}; color: ${ctx.design.ink};
+    font-family: ${ctx.design.serif}; -webkit-font-smoothing: antialiased; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px;
     display: flex; flex-direction: column; justify-content: center; align-items: center;
-    background:
-      radial-gradient(60% 70% at 6% 4%, rgba(120,20,20,0.45) 0%, rgba(0,0,0,0) 55%),
-      radial-gradient(60% 70% at 96% 96%, rgba(110,18,18,0.40) 0%, rgba(0,0,0,0) 58%),
-      radial-gradient(120% 90% at 50% 46%, #0a1413 0%, #070a0e 45%, #04050a 100%); }
-  .vig { position: absolute; inset: 0; pointer-events: none;
-    background: radial-gradient(95% 95% at 50% 50%, rgba(0,0,0,0) 52%, rgba(0,0,0,0.6) 100%); }
-  .chapno { font-size: 30px; letter-spacing: 14px; color: #eaaab1; opacity: 0;
-    font-weight: 600; margin-bottom: 30px; padding-left: 14px; }
-  .rule { width: 0; height: 3px; background: linear-gradient(90deg, #c98f2e, #f4d479, #c98f2e);
-    margin: 26px 0; border-radius: 2px; }
-  .titlecn { font-size: 150px; font-weight: 800; letter-spacing: 6px; line-height: 1.05;
-    background: linear-gradient(180deg, #f7e4a6 0%, #e9b84a 48%, #b9842b 100%);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 6px 26px rgba(233,184,74,0.35)); opacity: 0; }
-  .titleen { font-size: 34px; letter-spacing: 13px; text-transform: uppercase;
-    color: #c98a93; opacity: 0; margin-top: 6px; }
-  .years { margin-top: 40px; font-size: 26px; font-weight: 700; letter-spacing: 6px;
-    color: #ffd6e0; background: #b5325a; padding: 8px 26px; border-radius: 7px; opacity: 0; }
+    background: ${ctx.design.paper}; }
+  .vig { display: none; }
+  .chapno { font-family: ${ctx.design.sans}; font-size: 28px; letter-spacing: 0.34em; color: ${ctx.design.terra2}; opacity: 0;
+    font-weight: 600; margin-bottom: 30px; padding-left: 0.34em; }
+  .rule { width: 0; height: 3px; background: ${ctx.design.terra};
+    margin: 30px 0; border-radius: 0; }
+  .titlecn { font-size: 158px; font-weight: ${ctx.design.displayWeight}; letter-spacing: 0.04em; line-height: 1.06;
+    font-family: ${ctx.design.display === "serif" ? ctx.design.serif : ctx.design.sans};
+    color: ${ctx.design.ink}; opacity: 0; }
+  .titleen { font-family: ${ctx.design.sans}; font-size: 30px; letter-spacing: 0.34em; text-transform: uppercase;
+    color: ${ctx.design.muted}; opacity: 0; margin-top: 10px; }
+  .years { font-family: ${ctx.design.sans}; margin-top: 44px; font-size: 24px; font-weight: 600; letter-spacing: 0.1em;
+    color: ${ctx.design.pw}; background: ${ctx.design.terra}; padding: 8px 26px; border-radius: 4px; opacity: 0; }
 </style>
 </head>
 <body>
@@ -1714,30 +1700,21 @@ const hfStatCounter: MethodRenderer = (scene, ctx) => {
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden;
-    background: #04050a; color: #fff;
-    font-family: -apple-system, "PingFang SC", "Source Han Sans SC", sans-serif; }
+    background: ${ctx.design.paper}; color: ${ctx.design.ink};
+    font-family: ${ctx.design.serif}; -webkit-font-smoothing: antialiased; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px;
     display: flex; flex-direction: column; justify-content: center; align-items: center;
-    background:
-      radial-gradient(55% 65% at 50% 44%, rgba(180,120,30,0.16) 0%, rgba(0,0,0,0) 60%),
-      radial-gradient(120% 90% at 50% 50%, #0a0f14 0%, #06080d 55%, #04050a 100%); }
-  .vig { position: absolute; inset: 0; pointer-events: none;
-    background: radial-gradient(95% 95% at 50% 50%, rgba(0,0,0,0) 50%, rgba(0,0,0,0.6) 100%); }
-  .ring { position: absolute; width: 760px; height: 760px; border-radius: 50%;
-    border: 2px solid rgba(244,212,121,0.22); box-shadow: 0 0 90px rgba(244,212,121,0.12) inset;
-    opacity: 0; }
-  .sub { font-size: 30px; letter-spacing: 6px; color: #9aa0ad; opacity: 0; margin-bottom: 18px; }
+    background: ${ctx.design.paper}; }
+  .vig { display: none; }
+  .ring { position: absolute; width: 740px; height: 740px; border-radius: 50%;
+    border: 1.5px solid ${ctx.design.line}; opacity: 0; }
+  .sub { font-family: ${ctx.design.sans}; font-size: 28px; font-weight: 600; letter-spacing: 0.16em; color: ${ctx.design.terra2}; opacity: 0; margin-bottom: 22px; }
   .numwrap { display: flex; align-items: baseline; opacity: 0; }
-  .num { font-size: 260px; font-weight: 800; line-height: 1; letter-spacing: 2px;
-    font-variant-numeric: tabular-nums;
-    background: linear-gradient(180deg, #f7e4a6 0%, #ecbe53 46%, #c2882b 100%);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 8px 30px rgba(236,190,83,0.4)); }
-  .pre { font-size: 130px; font-weight: 800; color: #ecbe53; margin-right: 8px;
-    -webkit-text-fill-color: #ecbe53; }
-  .suf { font-size: 110px; font-weight: 700; color: #ecbe53; margin-left: 14px; }
-  .label { font-size: 46px; font-weight: 600; color: #e9eaf0; opacity: 0; margin-top: 34px;
-    letter-spacing: 2px; text-shadow: 0 2px 12px rgba(0,0,0,0.7); }
+  .num { font-size: 260px; font-weight: ${ctx.design.displayWeight}; line-height: 1; letter-spacing: 0.01em;
+    font-variant-numeric: tabular-nums; font-family: ${ctx.design.numberFamily === "serif" ? ctx.design.serif : ctx.design.sans}; color: ${ctx.design.ink}; }
+  .pre { font-size: 120px; font-weight: 700; color: ${ctx.design.terra}; margin-right: 10px; }
+  .suf { font-size: 108px; font-weight: 600; color: ${ctx.design.terra}; margin-left: 14px; }
+  .label { font-family: ${ctx.design.sans}; font-size: 40px; font-weight: 600; color: ${ctx.design.ink2}; opacity: 0; margin-top: 40px; letter-spacing: 0.04em; }
 </style>
 </head>
 <body>

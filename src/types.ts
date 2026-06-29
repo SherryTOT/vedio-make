@@ -58,6 +58,44 @@ export interface MethodDef {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Design system (multi-style presets, selectable + per-scene overridable)
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface DesignMotion {
+  ease: string;                                  // GSAP ease, e.g. "power3.out"
+  tempo: "deliberate" | "snappy" | "gentle";
+  enter: "rise" | "settle";
+}
+
+export interface DesignTokens {
+  paper: string; pw: string;
+  ink: string; ink2: string; muted: string;
+  accent: string; accent2: string;
+  line: string;
+  serif: string; sans: string;
+  display: "serif" | "sans";
+  displayWeight: number;
+  numberFamily: "serif" | "sans";
+  chartPalette: string[];
+  motion?: DesignMotion;        // optional on overrides; presets always set it
+}
+
+/** Storyboard/scene-level selection: a preset id plus optional token overrides. */
+export interface DesignSelection {
+  presetId: string;
+  overrides?: Partial<DesignTokens>;
+}
+
+/** Fully-resolved tokens a renderer reads. Always has motion + the preset id.
+ *  terra/terra2 are temporary migration aliases for accent/accent2. */
+export type ResolvedDesign = DesignTokens & {
+  motion: DesignMotion;
+  __presetId: string;
+  terra: string;   // alias → accent
+  terra2: string;  // alias → accent2
+};
+
+// ───────────────────────────────────────────────────────────────────────────
 // Scene (one or more contiguous cues, mapped to a method)
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -199,6 +237,10 @@ export interface Scene {
     | "documentary"
     | "tech-3d";
 
+  /** Per-scene style override. Wins over project.design.
+   *  presetId omitted = inherit project preset, only override tokens. */
+  style?: { presetId?: string; overrides?: Partial<DesignTokens> };
+
   /** Filled after render — relative path to the scene MP4 (e.g. "output/scenes/scene-001.mp4") */
   renderedPath?: string;
   /** Source-code hash at time of render — bumps when method / scene text changes,
@@ -235,6 +277,8 @@ export interface Storyboard {
     fps: number;
     /** Path to design.md (relative) */
     designDoc: string;
+    /** Selected visual style preset + optional token overrides. Absent ⇒ inkwork. */
+    design?: DesignSelection;
   };
   /** Available assets in assets/ folder at plan time */
   assetPool: string[];

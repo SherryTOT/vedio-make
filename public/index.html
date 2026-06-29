@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vedio Make · 分镜台</title>
+  <script>
+    try { document.documentElement.dataset.theme = localStorage.getItem("vm-theme") === "dark" ? "dark" : "light"; }
+    catch { document.documentElement.dataset.theme = "light"; }
+  </script>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <button id="brand" class="brand" type="button" aria-label="返回项目首页">
+      <span class="mark" aria-hidden="true">▤</span>
+      <strong>Vedio Make<span class="brand-sub">分镜台</span></strong>
+    </button>
+
+    <div id="home-actions" class="header-actions">
+      <button class="ghost theme-toggle" data-theme-toggle type="button" aria-label="切换主题"></button>
+      <button id="refresh-projects" class="ghost" type="button">刷新</button>
+      <button id="new-project" class="primary" type="button">＋ 新建项目</button>
+    </div>
+
+    <div id="board-actions" class="board-actions" hidden>
+      <div class="board-heading">
+        <button id="back-home" class="back" type="button">← 项目</button>
+        <span class="divider"></span>
+        <strong id="board-title"></strong>
+        <span id="board-dims" class="badge"></span>
+        <span id="board-stages" class="stages"></span>
+      </div>
+      <div class="board-tools">
+        <span id="save-status" class="save-status" aria-live="polite">已保存</span>
+        <span class="dur">总时长 <strong id="board-duration">0:00</strong></span>
+        <button class="ghost theme-toggle" data-theme-toggle type="button" aria-label="切换主题"></button>
+        <button class="ghost" data-op-design type="button" title="选择整体视觉风格并微调核心色">整体设计</button>
+        <button class="ghost" data-op-lint type="button" title="检查渲染产物有没有 AI 土味(渐变/发光/玻璃)">土味检查</button>
+        <button class="ghost" data-op-final type="button" title="播放拼好的整片 final.mp4">看整片</button>
+        <button class="ghost" data-op-export type="button" title="导出 FCPXML 时间线,可在 Final Cut / DaVinci / 剪映 打开收尾">导出剪辑</button>
+        <button class="op" data-op="analyze" type="button" title="让 Claude 给每个镜头挑可视化方法">分析</button>
+        <button class="op" data-op="images" type="button" title="为需要图片的镜头生成配图">配图</button>
+        <button class="op primary" data-op="render" type="button" title="渲染全部镜头并拼成 final.mp4">全部渲染</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="task-bar" class="task-bar" hidden>
+    <span id="task-label" class="task-label"></span>
+    <div class="task-track"><div id="task-fill" class="task-fill"></div></div>
+    <span id="task-log" class="task-log"></span>
+  </div>
+
+  <main id="projects-view" class="projects-view">
+    <section class="intro">
+      <div>
+        <p class="eyebrow">VEDIO MAKE</p>
+        <h1>视频分镜项目</h1>
+        <p class="sub">字幕 → 分镜 → 渲染。脚本、素材、产物都在本机。</p>
+      </div>
+      <span id="project-count" class="count"></span>
+    </section>
+    <section id="projects-grid" class="projects-grid"></section>
+  </main>
+
+  <main id="board-view" class="board-view" hidden>
+    <div id="next-hint" class="next-hint"></div>
+    <div class="table-shell">
+      <table>
+        <colgroup>
+          <col class="c-idx" /><col class="c-text" /><col class="c-method" />
+          <col class="c-reason" /><col class="c-extra" /><col class="c-notes" /><col class="c-preview" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>#</th><th>字幕文本</th><th>方法 / 备选</th><th>理由</th>
+            <th>资源 / 修饰</th><th>备注</th><th>预览 · 渲染</th>
+          </tr>
+        </thead>
+        <tbody id="scenes-body"></tbody>
+      </table>
+    </div>
+    <button id="add-scene" class="add-scene-btn" type="button">＋ 在末尾加一个镜头</button>
+  </main>
+
+  <dialog id="new-dialog" class="dialog">
+    <form method="dialog">
+      <div class="dialog-head"><h2>新建分镜项目</h2><button class="x" type="button" data-close aria-label="关闭">×</button></div>
+      <label class="field"><span>项目名称</span><input id="np-title" maxlength="60" placeholder="例如:AI 工具速览" required /></label>
+      <div class="grid2">
+        <label class="field"><span>宽</span><input id="np-w" type="number" value="1920" /></label>
+        <label class="field"><span>高</span><input id="np-h" type="number" value="1080" /></label>
+      </div>
+      <label class="field"><span>字幕 SRT(粘贴带时间码的 SRT)</span>
+        <textarea id="np-srt" rows="8" placeholder="1&#10;00:00:00,000 --> 00:00:03,000&#10;第一句字幕…"></textarea>
+      </label>
+      <div class="dialog-actions">
+        <button class="ghost" type="button" data-close>取消</button>
+        <button id="np-create" class="primary" type="button">创建并切分镜</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="design-dialog" class="dialog">
+    <form method="dialog">
+      <div class="dialog-head"><h2>整体设计</h2><button class="x" type="button" data-dz-close aria-label="关闭">×</button></div>
+      <label class="field"><span>预设风格</span><select id="dz-preset"></select></label>
+      <p id="dz-when" class="dz-when"></p>
+      <div class="dz-row">
+        <label class="dz-color"><span>纸面</span><input type="color" id="dz-paper" /></label>
+        <label class="dz-color"><span>墨色</span><input type="color" id="dz-ink" /></label>
+        <label class="dz-color"><span>强调色</span><input type="color" id="dz-accent" /></label>
+      </div>
+      <label class="field"><span>显示字体</span><select id="dz-display"><option value="serif">衬线(宋体)</option><option value="sans">黑体</option></select></label>
+      <div class="dialog-actions">
+        <button id="dz-reset" class="ghost" type="button">恢复预设默认</button>
+        <button id="dz-apply" class="primary" type="button">应用并重渲染</button>
+        <button class="ghost" type="button" data-dz-close>关闭</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="lightbox" class="lightbox" hidden role="dialog" aria-modal="true">
+    <button id="lb-close" class="lb-close" type="button" aria-label="关闭">×</button>
+    <div id="lb-stage" class="lb-stage"></div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

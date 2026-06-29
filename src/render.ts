@@ -22,6 +22,8 @@ import { METHOD_RENDERERS } from "./methods/registry.ts";
 import type { MethodRenderer, RenderContext } from "./methods/registry.ts";
 import type { Scene, Storyboard } from "./types.ts";
 import { hardenHyperFrames } from "./harden.ts";
+import { resolveDesign, resolveSceneDesign } from "./methods/designs.ts";
+import { lintSource } from "./methods/lint.ts";
 
 interface RenderOpts {
   storyboardPath: string;
@@ -614,7 +616,7 @@ export async function runRender(opts: RenderOpts): Promise<void> {
 
    Tip: any 'pipeline analyze' or 'pipeline edit' resets approval; you re-approve once you're happy.
 `);
-    process.exit(2);
+    throw new Error("storyboard 已分析但未确认 — 用 force 覆盖,或先确认(UI 点「全部渲染」会自动视为确认)");
   }
 
   const ctx: RenderContext = {
@@ -622,6 +624,7 @@ export async function runRender(opts: RenderOpts): Promise<void> {
     height: sb.project.height,
     fps: sb.project.fps,
     projectRoot: opts.projectRoot,
+    design: resolveDesign(sb.project.design),
   };
 
   const scenesDir = path.join(opts.outputDir, "scenes");
@@ -651,8 +654,11 @@ export async function runRender(opts: RenderOpts): Promise<void> {
     const renderer = METHOD_RENDERERS[scene.method];
     if (!renderer) { console.warn(`[scene ${scene.index}] method '${scene.method}' has no renderer — skipping.`); continue; }
 
-    const out = renderer(scene, ctx);
-    const srcHash = sha1(out.engine === "hyperframes" ? out.html : out.tsx + JSON.stringify(out.props ?? {}));
+    const sceneCtx: RenderContext = { ...ctx, design: resolveSceneDesign(sb.project.design, scene.style) };
+    const out = renderer(scene, sceneCtx);
+    const lint = lintSource(out.engine === "hyperframes" ? out.html : out.tsx);
+    if (lint.length) console.warn(`[scene ${scene.index}] 土味 lint: ${lint.map((f) => f.msg).join(" / ")}`);
+    const srcHash = sha1((out.engine === "hyperframes" ? out.html : out.tsx + JSON.stringify(out.props ?? {})) + JSON.stringify(sceneCtx.design));
     const sceneName = `scene-${String(scene.index).padStart(3, "0")}`;
     const sceneDir = path.join(scenesDir, `${sceneName}.${srcHash}`);
     const mp4Path = path.join(scenesDir, `${sceneName}.mp4`);

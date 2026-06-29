@@ -32,7 +32,7 @@
  */
 
 import http from "node:http";
-import { URL } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -47,6 +47,9 @@ import { runBgm } from "./bgm.ts";
 import { runRender } from "./render.ts";
 import { writeStoryboardHtml } from "./storyboard.ts";
 import { listProviders } from "./providers/registry.ts";
+import { DESIGNS, DEFAULT_DESIGN_ID } from "./methods/designs.ts";
+import { lintStoryboard } from "./methods/lint.ts";
+import { buildFcpxml, buildEdl } from "./export_nle.ts";
 
 const VERSION = "0.2.0";
 
@@ -247,6 +250,13 @@ async function runTaskBody(t: Task, body: any): Promise<void> {
       });
       break;
     case "render":
+      // Full render (only==null) from the app = the user's deliberate approval.
+      if ((body.only ?? null) === null) {
+        try {
+          const _sb = JSON.parse(fs.readFileSync(sbPath, "utf8"));
+          if (_sb.stages && !_sb.stages.approved) { _sb.stages.approved = true; fs.writeFileSync(sbPath, JSON.stringify(_sb, null, 2)); }
+        } catch {}
+      }
       await runRender({
         storyboardPath: sbPath,
         outputDir: path.join(proj.dir, "output"),
@@ -300,11 +310,70 @@ function sendText(res: http.ServerResponse, status: number, body: string, conten
   res.end(body);
 }
 
+// ─── Static UI (the storyboard 分镜台 web front-end in ../public) ──────────
+const PUBLIC_DIR = fileURLToPath(new URL("../public", import.meta.url));
+const STATIC_MIME: Record<string, string> = {
+  ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
+  ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png",
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+  ".gif": "image/gif", ".ico": "image/x-icon", ".woff2": "font/woff2",
+};
+
+/** Serve index.html with the bearer token injected, so the same-origin page can call /api/*. */
+function serveIndexHtml(res: http.ServerResponse, token: string): void {
+  const idx = path.join(PUBLIC_DIR, "index.html");
+  if (!fs.existsSync(idx)) return sendJson(res, 404, { error: "UI not built (public/index.html missing)" });
+  const html = fs
+    .readFileSync(idx, "utf8")
+    .replace("</head>", `<script>window.__PIPELINE_TOKEN__=${JSON.stringify(token || "")}</script></head>`);
+  res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(html);
+}
+
+/** Static file server for public/ — no auth (the page must boot before it has a token). */
+function serveStatic(res: http.ServerResponse, pathname: string, token: string): void {
+  let rel = decodeURIComponent(pathname);
+  if (rel === "/" || rel === "") return serveIndexHtml(res, token);
+  const abs = path.resolve(PUBLIC_DIR, "." + rel);
+  if (!abs.startsWith(PUBLIC_DIR) || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+    // Unknown non-asset path → fall back to the SPA shell.
+    if (path.extname(abs) === "") return serveIndexHtml(res, token);
+    return sendJson(res, 404, { error: "not found" });
+  }
+  const ext = path.extname(abs).toLowerCase();
+  if (ext === ".html") return serveIndexHtml(res, token);
+  res.writeHead(200, {
+    "Content-Type": `${STATIC_MIME[ext] ?? "application/octet-stream"}; charset=utf-8`,
+    "Cache-Control": "no-store",
+  });
+  fs.createReadStream(abs).pipe(res);
+}
+
 function authOK(req: http.IncomingMessage, token: string): boolean {
   if (!token) return true; // dev: no token configured → open
   const h = req.headers.authorization ?? "";
   const m = h.match(/^Bearer\s+(.+)$/i);
-  return m ? m[1] === token : false;
+  if (m && m[1] === token) return true;
+  // Allow ?token= for same-origin media elements (<video>/<img>) that can't send headers.
+  try {
+    const u = new URL(req.url ?? "/", `http://${req.headers.host}`);
+    if (u.searchParams.get("token") === token) return true;
+  } catch {}
+  return false;
+}
+
+/** Stamp a default style preset on a storyboard body that lacks one. Never throws. */
+function ensureDesignDefault(raw: string): string {
+  try {
+    const sb = JSON.parse(raw);
+    if (sb?.project && !sb.project.design) {
+      sb.project.design = { presetId: DEFAULT_DESIGN_ID };
+      return JSON.stringify(sb);
+    }
+    return raw;
+  } catch {
+    return raw; // malformed → write verbatim, never 500
+  }
 }
 
 export async function startServer(opts: {
@@ -327,6 +396,11 @@ export async function startServer(opts: {
         return sendJson(res, 200, { name: "video-pipeline", version: VERSION, port: opts.port });
       }
 
+      // Static UI (public/) — served WITHOUT auth so the page can boot; /api/* stays gated below.
+      if (req.method === "GET" && !url.pathname.startsWith("/api/")) {
+        return serveStatic(res, url.pathname, opts.token);
+      }
+
       // Auth gate
       if (!authOK(req, opts.token)) {
         return sendJson(res, 401, { error: "missing or wrong bearer token" });
@@ -339,6 +413,17 @@ export async function startServer(opts: {
           music:  listProviders("music"),
           image:  listProviders("image"),
           search: listProviders("search"),
+        });
+      }
+
+      // Style preset catalog — the 分镜台 reads this to populate the 整体设计 picker.
+      if (route === "GET /api/designs") {
+        return sendJson(res, 200, {
+          default: DEFAULT_DESIGN_ID,
+          designs: Object.values(DESIGNS).map((d) => ({
+            id: d.id, name: d.name, vibe: d.vibe,
+            whenToUse: d.whenToUse, tokens: d.tokens, motion: d.motion,
+          })),
         });
       }
 
@@ -405,8 +490,33 @@ export async function startServer(opts: {
 
         if (req.method === "PUT" && sub === "/storyboard") {
           const body = await readBody(req);
-          fs.writeFileSync(path.join(proj.dir, "output/storyboard.json"), body);
+          fs.writeFileSync(path.join(proj.dir, "output/storyboard.json"), ensureDesignDefault(body));
           return sendJson(res, 200, { ok: true });
+        }
+
+        // 土味 lint — scan each scene's would-be composition for AI-slop signals.
+        if (req.method === "POST" && sub === "/lint") {
+          const sbPath = path.join(proj.dir, "output/storyboard.json");
+          if (!fs.existsSync(sbPath)) return sendJson(res, 404, { error: "no storyboard yet" });
+          const sb = JSON.parse(fs.readFileSync(sbPath, "utf8"));
+          return sendJson(res, 200, { scenes: lintStoryboard(sb, proj.dir) });
+        }
+
+        // Export an NLE timeline (FCPXML / CMX3600 EDL) of the rendered scenes.
+        const expM = sub.match(/^\/export\/(fcpxml|edl)$/);
+        if (req.method === "GET" && expM) {
+          const sbPath = path.join(proj.dir, "output/storyboard.json");
+          if (!fs.existsSync(sbPath)) return sendJson(res, 404, { error: "no storyboard yet" });
+          const sb = JSON.parse(fs.readFileSync(sbPath, "utf8"));
+          const fmt = expM[1];
+          const body = fmt === "fcpxml" ? buildFcpxml(sb, proj.dir) : buildEdl(sb, proj.dir);
+          const safe = String(proj.title || "vedio-make").replace(/[^\w一-鿿.-]+/g, "_");
+          res.writeHead(200, {
+            "Content-Type": fmt === "fcpxml" ? "application/xml; charset=utf-8" : "text/plain; charset=utf-8",
+            "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(safe + "." + fmt)}`,
+          });
+          res.end(body);
+          return;
         }
 
         // Enqueue async ops
