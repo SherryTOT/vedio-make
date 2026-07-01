@@ -100,9 +100,10 @@ function usage(): never {
   pipeline fetch     <query> [--provider pexels|unsplash|pixabay|51yuansu|envato] [--type photo|video|psd|...] [--orientation] [--count N] [--scene N]
   pipeline import    <folder|file> [--scene N] [--pattern '*.psd'] [--foreground] [--symlink]
   pipeline translate <lang>  [--in JSON] [--source <lang>] [--provider] [--force]
-  pipeline render    [--in JSON] [--only N] [--force] [--workers 2] [--stitch]
+  pipeline render    [--in JSON] [--only N] [--force] [--workers 2] [--stitch] [--estimate]
   pipeline validate  [--in JSON]   (渲染前结构校验 + 幻灯片风险评分;有致命问题退出码 1)
   pipeline review    [--in JSON]   (渲染后自检 final.mp4:ffprobe + 抽帧 + 音频;写 output/qa-report.json)
+  pipeline cost      [--in JSON] [--tts p] [--image p] [--music p]   (数量级成本预估;免费 provider 计 $0)
   pipeline serve     [--port 8766] [--host 127.0.0.1] [--token <bearer>] [--projects ./projects]
 `);
   process.exit(1);
@@ -456,7 +457,35 @@ async function main() {
       console.error(`Storyboard JSON not found: ${inPath}`);
       process.exit(1);
     }
+    if (flags.estimate) {
+      // Dry-run: show the cost estimate and DON'T render.
+      const { estimateStoryboard, summarizeCost } = await import("./cost.ts");
+      const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
+      const est = estimateStoryboard(sb, { withMusic: Boolean(flags.music) });
+      console.log(summarizeCost(est));
+      for (const li of est.lineItems) console.log(`  · ${li.category} [${li.provider}] ${li.quantity}${li.unit} → $${li.totalUsd.toFixed(2)}  (${li.basis})`);
+      console.log(`\n${est.disclaimer}`);
+      return;
+    }
     await runRender({ storyboardPath: inPath, outputDir, projectRoot: root, force, only, workers, stitchOnly });
+    return;
+  }
+
+  if (cmd === "cost") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
+    const { estimateStoryboard, summarizeCost } = await import("./cost.ts");
+    const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
+    const est = estimateStoryboard(sb, {
+      ttsProvider: flags.tts as string | undefined,
+      imageProvider: flags.image as string | undefined,
+      musicProvider: flags.music as string | undefined,
+      withMusic: Boolean(flags.music),
+    });
+    console.log(summarizeCost(est));
+    for (const li of est.lineItems) console.log(`  · ${li.category} [${li.provider}] ${li.quantity}${li.unit} → $${li.totalUsd.toFixed(2)}  (${li.basis})`);
+    console.log(`\n${est.disclaimer}`);
     return;
   }
 
@@ -480,11 +509,13 @@ async function main() {
   if (cmd === "review") {
     const flags = parseFlags(rest);
     const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
-    const outputDir = path.resolve(root, "output");
     if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
+    // The storyboard lives in output/, so final.mp4 + qa/ are siblings of it.
+    const outputDir = path.dirname(inPath);
+    const projectRoot = path.dirname(outputDir);
     const { reviewFinal, summarizeReport } = await import("./review.ts");
     const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
-    const qa = await reviewFinal(sb, outputDir, root);
+    const qa = await reviewFinal(sb, outputDir, projectRoot);
     console.log(summarizeReport(qa));
     for (const f of qa.findings) console.log(`  ${f.level === "error" ? "✗" : f.level === "warn" ? "⚠" : "·"} ${f.msg}`);
     console.log(`\n报告: output/qa-report.json · 抽样帧: output/qa/`);

@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Vedio Make storyboard.json",
+  "description": "Contract for output/storyboard.json. Validated (subset) by src/schema.ts before render. Unknown properties are allowed on purpose — the shape evolves.",
+  "type": "object",
+  "required": ["source", "project", "scenes", "stages"],
+  "properties": {
+    "source": { "type": "string" },
+    "project": {
+      "type": "object",
+      "required": ["title", "width", "height", "fps"],
+      "properties": {
+        "title": { "type": "string" },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "fps": { "type": "number", "minimum": 1, "maximum": 120 },
+        "designDoc": { "type": "string" },
+        "design": {
+          "type": "object",
+          "required": ["presetId"],
+          "properties": { "presetId": { "type": "string" } }
+        }
+      }
+    },
+    "assetPool": { "type": "array", "items": { "type": "string" } },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["index", "startSec", "endSec", "durationSec", "text"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 1 },
+          "startSec": { "type": "number", "minimum": 0 },
+          "endSec": { "type": "number", "minimum": 0 },
+          "durationSec": { "type": "number" },
+          "text": { "type": "string" },
+          "method": { "type": ["string", "null"] },
+          "fallback": { "type": ["string", "null"] },
+          "reasoning": { "type": ["string", "null"] },
+          "assets": { "type": "array", "items": { "type": "string" } },
+          "notes": { "type": "array" },
+          "transition": { "type": "string", "enum": ["cut", "fade", "dip-to-black", "wipe-left", "wipe-right", "push-up"] },
+          "transitionDur": { "type": "number", "minimum": 0 },
+          "status": { "type": "string", "enum": ["pending", "rendering", "rendered", "failed"] },
+          "renderedPath": { "type": "string" },
+          "renderedHash": { "type": "string" }
+        }
+      }
+    },
+    "createdAt": { "type": "string" },
+    "stages": {
+      "type": "object",
+      "required": ["parsed", "analyzed", "approved", "rendered"],
+      "properties": {
+        "parsed": { "type": "boolean" },
+        "analyzed": { "type": "boolean" },
+        "approved": { "type": "boolean" },
+        "rendered": { "type": "boolean" }
+      }
+    }
+  }
+}

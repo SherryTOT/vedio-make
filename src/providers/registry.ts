@@ -89,6 +89,57 @@ export function listProviders(capability: Capability): string[] {
   return Object.keys(REGISTRY[capability]);
 }
 
+// ── Fallback chains ───────────────────────────────────────────────────────
+// When a provider call fails at runtime (missing key, network blip, restricted
+// network — Edge's handshake is a known offender), fall back to a safer one.
+// Edge TTS is free and needs no key, so it's the natural TTS safety net.
+const FALLBACKS: Partial<Record<Capability, Record<string, string>>> = {
+  tts:    { voice: "edge", minimax: "edge" },
+  chat:   { minimax: "deepseek", deepseek: "openai" },
+  image:  { minimax: "openai" },
+  search: { minimax: "tavily", tavily: "minimax" },
+};
+
+/** Ordered provider chain [primary, …fallbacks], cycle-safe, only existing ids. */
+export function fallbackChain(capability: Capability, providerId?: string): string[] {
+  const start = resolveId(capability, providerId);
+  const chain: string[] = [];
+  const seen = new Set<string>();
+  let cur: string | undefined = start;
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    if (REGISTRY[capability][cur]) chain.push(cur);
+    cur = FALLBACKS[capability]?.[cur];
+  }
+  return chain.length ? chain : [start];
+}
+
+/**
+ * Run `use` against the primary provider; on failure, walk the fallback chain.
+ * `onFallback(from, to, err)` fires before each downgrade (e.g. to log a
+ * decision). Throws the LAST error if every provider in the chain fails.
+ */
+export async function withFallback<C, R>(
+  capability: Capability,
+  providerId: string | undefined,
+  get: (id: string) => C,
+  use: (client: C, id: string) => Promise<R>,
+  onFallback?: (from: string, to: string, err: Error) => void,
+): Promise<R> {
+  const chain = fallbackChain(capability, providerId);
+  let lastErr: unknown;
+  for (let i = 0; i < chain.length; i++) {
+    const id = chain[i];
+    try {
+      return await use(get(id), id);
+    } catch (e) {
+      lastErr = e;
+      if (i < chain.length - 1) onFallback?.(id, chain[i + 1], e as Error);
+    }
+  }
+  throw lastErr;
+}
+
 export function getChat(providerId?: string): ChatClient {
   const id = resolveId("chat", providerId);
   const adapter = REGISTRY.chat[id];

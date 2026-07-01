@@ -112,3 +112,10 @@ stitch-only 重建一致;看门狗 1.5s 内杀掉假死进程树、无孤儿;抽
 - **`src/review.ts`** —— 渲染后**自检**(= 看真实产物)。ffprobe(时长/分辨率/编码/音轨 vs 预期)+ 抽 4 帧查黑帧/纯色(signalstats YAVG,注意米白底帧亮度高~200+,不会误判黑)+ 音频电平(volumedetect 查静音/削波)。写 `output/qa-report.json` + `output/qa/frame-*.jpg`,返回 pass/warn/fail,**永不抛异常**。挂在 `stitchFinal()` 末尾,全片渲染 + stitch-only 都会跑。
 - 接线:`proc.ts` 的 `runCapture` 现在也返回 `stderr`(volumedetect 在 stderr)。端点 `POST /api/projects/:id/validate` → {validate, slideshow}(仿 `/lint`)。CLI:`pipeline validate`(有致命退出码 1)、`pipeline review`。`RenderOpts.skipValidate` 可跳过。
 - **实测**:健康板 0 问题;坏板(null method 等)被拦、0ms;真实 final.mp4 自检 pass、抽帧 frame-4.jpg 抓到真实 d3 柱图;daemon 全流程 validate→slideshow→render→自检 全部串起。
+
+## 7. ✅ 借鉴 OpenMontage 的 roadmap 四项(2026-07-01,clean-room,零新依赖)
+- **storyboard JSON Schema**:`schemas/storyboard.schema.json` + 自研极简校验器 `src/schema.ts`(不引 ajv,守零依赖)。作为 `validate.ts` 的**第一道 shape 检查**(类型/必填/enum),坏结构直接拦。
+- **成本预估**:`src/cost.ts`(数量级、非账单;免费 provider=$0)。`pipeline cost` / `pipeline render --estimate`(dry-run 不渲染)/ `GET /api/projects/:id/cost?tts=&image=&music=`。单价是可改常量。**不做预算闸/上限**(单人本地过度)。
+- **决策日志**:`src/decisions.ts`(append 到 `output/decisions.json`,永不抛)。`GET /api/projects/:id/decisions`。已接到 TTS provider 回退事件。
+- **provider 回退链**:`providers/registry.ts` 加 `fallbackChain()` + `withFallback()`(环安全);已接进 `tts.ts`——主 provider 失败自动降级(→ Edge 免费兜底)并写一条决策日志。链:tts voice→edge、chat minimax→deepseek→openai、image minimax→openai、search minimax↔tavily。
+- 实测:schema 抓到 width 类型错/缺 text/坏 transition;cost 免费板 $0、付费 minimax+music $0.20(0.12–0.32);withFallback 主失败→edge 兜底+落日志;daemon /cost /decisions /validate 全通;CLI cost/validate/review 用 `--in` 均通。

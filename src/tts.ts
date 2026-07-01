@@ -11,7 +11,8 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { getTts } from "./providers/registry.ts";
+import { getTts, withFallback } from "./providers/registry.ts";
+import { logDecision } from "./decisions.ts";
 import { touchVoice } from "./providers/minimax/voice-clone.ts";
 import type { Storyboard } from "./types.ts";
 
@@ -80,6 +81,23 @@ export async function runTts(opts: TtsOpts): Promise<VoiceTrack> {
   const ttsClient = getTts(opts.provider);
   console.log(`[tts] provider=${ttsClient.id}  voice=${opts.voiceId}  speed=${opts.speed}`);
 
+  // Fallback-aware synth: if the chosen provider fails (missing key / network),
+  // walk the fallback chain (…→ Edge, which is free + keyless) and log the
+  // downgrade to output/decisions.json.
+  const outputDir = path.dirname(opts.trackPath);
+  const synth = (o: { text: string; voiceId?: string; speed?: number }, sceneIdx: number) =>
+    withFallback(
+      "tts", opts.provider, getTts,
+      (c) => c.tts(o),
+      (from, to, err) => {
+        console.warn(`   ↪ [scene ${sceneIdx}] tts provider '${from}' 失败(${err.message.slice(0, 60)})— 回退到 '${to}'`);
+        logDecision(outputDir, {
+          stage: "tts", category: "provider-fallback", subject: `场景 #${sceneIdx} 配音`,
+          selected: to, options: [from, to], reason: `${from} 失败:${err.message.slice(0, 80)}`, confidence: "high",
+        });
+      },
+    );
+
   const entries: VoiceEntry[] = [];
 
   // Load existing track for cache lookup
@@ -112,7 +130,7 @@ export async function runTts(opts: TtsOpts): Promise<VoiceTrack> {
     console.log(`[scene ${sc.index}] tts → ${filename}${voiceLabel}  '${text.slice(0, 36)}${text.length > 36 ? "…" : ""}'`);
     try {
       // First pass at requested speed
-      let audio = await ttsClient.tts({ text, voiceId: effectiveVoice, speed: opts.speed });
+      let audio = await synth({ text, voiceId: effectiveVoice, speed: opts.speed }, sc.index);
       fs.writeFileSync(absPath, audio);
 
       // Adaptive-speed retry: if the spoken audio overflows the scene window,
@@ -128,7 +146,7 @@ export async function runTts(opts: TtsOpts): Promise<VoiceTrack> {
             `   ↪ tts ${measured.toFixed(2)}s overflows ${sceneBudget.toFixed(2)}s window — retrying at speed=${fitSpeed.toFixed(2)}`
           );
           try {
-            audio = await ttsClient.tts({ text, voiceId: effectiveVoice, speed: fitSpeed });
+            audio = await synth({ text, voiceId: effectiveVoice, speed: fitSpeed }, sc.index);
             fs.writeFileSync(absPath, audio);
             measured = probeDurationSec(absPath);
             usedSpeed = fitSpeed;

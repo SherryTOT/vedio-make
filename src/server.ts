@@ -52,6 +52,8 @@ import { lintStoryboard } from "./methods/lint.ts";
 import { buildFcpxml, buildEdl } from "./export_nle.ts";
 import { validateStoryboard } from "./validate.ts";
 import { scoreSlideshowRisk } from "./slideshow.ts";
+import { estimateStoryboard } from "./cost.ts";
+import { readDecisions } from "./decisions.ts";
 
 const VERSION = "0.2.0";
 
@@ -566,6 +568,24 @@ export async function startServer(opts: {
             validate: validateStoryboard(sb, proj.dir, null),
             slideshow: scoreSlideshowRisk(sb, proj.dir),
           });
+        }
+
+        // Cost estimate (order-of-magnitude; free providers = $0). ?tts=&image=&music=
+        if (req.method === "GET" && sub === "/cost") {
+          const sbPath = path.join(proj.dir, "output/storyboard.json");
+          if (!fs.existsSync(sbPath)) return sendJson(res, 404, { error: "no storyboard yet" });
+          const sb = JSON.parse(fs.readFileSync(sbPath, "utf8"));
+          return sendJson(res, 200, estimateStoryboard(sb, {
+            ttsProvider: url.searchParams.get("tts") ?? undefined,
+            imageProvider: url.searchParams.get("image") ?? undefined,
+            musicProvider: url.searchParams.get("music") ?? undefined,
+            withMusic: url.searchParams.get("music") != null,
+          }));
+        }
+
+        // Auditable decision log (provider fallbacks, etc.).
+        if (req.method === "GET" && sub === "/decisions") {
+          return sendJson(res, 200, { decisions: readDecisions(path.join(proj.dir, "output")) });
         }
 
         // Export an NLE timeline (FCPXML / CMX3600 EDL) of the rendered scenes.

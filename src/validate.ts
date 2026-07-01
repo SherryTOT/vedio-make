@@ -11,8 +11,21 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { METHOD_RENDERERS } from "./methods/registry.ts";
+import { validateSchema } from "./schema.ts";
 import type { Storyboard } from "./types.ts";
+
+/** The storyboard JSON Schema, loaded once from schemas/storyboard.schema.json. */
+let _schema: any = null;
+function storyboardSchema(): any {
+  if (_schema) return _schema;
+  try {
+    const p = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "schemas", "storyboard.schema.json");
+    _schema = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch { _schema = {}; }
+  return _schema;
+}
 
 export type Level = "error" | "warn";
 export interface ValidateFinding {
@@ -44,6 +57,15 @@ export function validateStoryboard(
 ): ValidateFinding[] {
   const f: ValidateFinding[] = [];
   const add = (level: Level, code: string, msg: string, scene?: number) => f.push({ level, code, msg, scene });
+
+  // ─ Shape (JSON Schema) ─ run first: if the storyboard is malformed (wrong
+  //   types, missing required fields), the semantic checks below would crash on
+  //   bad data, so return the schema errors immediately.
+  const shapeErrors = validateSchema(sb, storyboardSchema());
+  if (shapeErrors.length) {
+    for (const e of shapeErrors) add("error", "schema", `结构不合法 ${e.path}:${e.msg}`);
+    return f;
+  }
 
   // ─ Project-level ─
   const p = sb.project;
