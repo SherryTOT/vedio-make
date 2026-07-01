@@ -45,6 +45,7 @@ const VENDOR_FILES: Record<string, string> = {
   "vendor/gsap.min.js": path.join(ASSETS, "vendor", "gsap.min.js"),
   "vendor/anime.min.js": path.join(ASSETS, "vendor", "anime.min.js"),
   "vendor/lottie.min.js": path.join(ASSETS, "vendor", "lottie.min.js"),
+  "vendor/tailwind.min.js": path.join(ASSETS, "vendor", "tailwind.min.js"),
 };
 
 // Sans families used by generators → bundled Noto Sans SC.
@@ -78,6 +79,13 @@ const CDN_REWRITES: Array<{ re: RegExp; local: string }> = [
     re: /https?:\/\/cdn\.jsdelivr\.net\/npm\/lottie-web@[^"']*/g,
     local: "vendor/lottie.min.js",
   },
+  // Tailwind Play CDN is a host-only URL (no path). It is a ~400KB JIT runtime
+  // that the hf-tailwind-card method <script src>'s. Left on the network it
+  // makes EVERY render fetch cdn.tailwindcss.com at compile + runtime; on a
+  // flaky/offline host each fetch stalls on ERR_TIMED_OUT and the render
+  // appears to hang for minutes. Vendoring it removes the only remaining
+  // external request from generated scenes, so renders are fully offline.
+  { re: /https?:\/\/cdn\.tailwindcss\.com[^"'\s>]*/g, local: "vendor/tailwind.min.js" },
 ];
 
 export interface HardenResult {
@@ -119,6 +127,21 @@ export function hardenHyperFrames(
   // 4. Always ship the CJK fonts next to index.html so @font-face resolves.
   for (const [rel, abs] of Object.entries(FONT_FILES)) {
     if (fs.existsSync(abs)) extra[rel] = abs;
+  }
+
+  // 5. Safety net: warn about any OTHER external http(s) reference still in the
+  //    scene. Anything left here is fetched at render time → non-deterministic
+  //    and a multi-minute stall risk offline. The XML namespace literal
+  //    (http://www.w3.org/...) is an identifier, not a fetch, so it's excluded.
+  const leftovers = [...out.matchAll(/\b(?:src|href)\s*=\s*["'](https?:\/\/[^"']+)["']/gi)]
+    .map((m) => m[1])
+    .filter((u) => !/^https?:\/\/(?:www\.)?w3\.org\//i.test(u));
+  if (leftovers.length) {
+    console.warn(
+      `[harden] ⚠ 场景仍引用未本地化的外部资源(渲染会联网、离线会卡):\n  ` +
+        [...new Set(leftovers)].join("\n  ") +
+        `\n  → 在 src/harden.ts 的 CDN_REWRITES 里加规则并把文件放进 assets/vendor/。`,
+    );
   }
 
   return { html: out, sideFiles: extra };

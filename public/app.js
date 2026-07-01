@@ -389,7 +389,16 @@ if (dzBtn) dzBtn.addEventListener("click", openDesignDialog);
 document.querySelectorAll("#design-dialog [data-dz-close]").forEach((b) => b.addEventListener("click", () => $("#design-dialog").close()));
 
 const finalBtn = document.querySelector("[data-op-final]");
-if (finalBtn) finalBtn.addEventListener("click", () => { if (state.pid) lightbox("video", fileUrl("output/final.mp4")); });
+if (finalBtn) finalBtn.addEventListener("click", async () => {
+  if (!state.pid || !state.sb) return;
+  const scenes = state.sb.scenes || [];
+  const allRendered = scenes.length > 0 && scenes.every((s) => s.renderedPath);
+  if (!allRendered) return toast("还有镜头未渲染 — 先「全部渲染」或逐镜「渲染此条」", "error");
+  // Re-assemble final.mp4 from the rendered scenes (reliable, no re-render), then play.
+  try { await runOp("stitch", {}, "拼接整片"); } catch { return; }
+  const u = fileUrl("output/final.mp4");
+  lightbox("video", u + (u.includes("?") ? "&" : "?") + "_=" + Date.now());
+});
 const addSceneBtn = document.querySelector("#add-scene");
 if (addSceneBtn) addSceneBtn.addEventListener("click", () => { if (state.sb) addScene(); });
 

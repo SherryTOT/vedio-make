@@ -100,7 +100,9 @@ function usage(): never {
   pipeline fetch     <query> [--provider pexels|unsplash|pixabay|51yuansu|envato] [--type photo|video|psd|...] [--orientation] [--count N] [--scene N]
   pipeline import    <folder|file> [--scene N] [--pattern '*.psd'] [--foreground] [--symlink]
   pipeline translate <lang>  [--in JSON] [--source <lang>] [--provider] [--force]
-  pipeline render    [--in JSON] [--only N] [--force] [--workers 2]
+  pipeline render    [--in JSON] [--only N] [--force] [--workers 2] [--stitch]
+  pipeline validate  [--in JSON]   (渲染前结构校验 + 幻灯片风险评分;有致命问题退出码 1)
+  pipeline review    [--in JSON]   (渲染后自检 final.mp4:ffprobe + 抽帧 + 音频;写 output/qa-report.json)
   pipeline serve     [--port 8766] [--host 127.0.0.1] [--token <bearer>] [--projects ./projects]
 `);
   process.exit(1);
@@ -448,13 +450,45 @@ async function main() {
     const outputDir = path.resolve(root, "output");
     const only = flags.only ? parseInt(flags.only as string, 10) : null;
     const force = Boolean(flags.force);
+    const stitchOnly = Boolean(flags.stitch);
     const workers = flags.workers ? parseInt(flags.workers as string, 10) : 1;
     if (!fs.existsSync(inPath)) {
       console.error(`Storyboard JSON not found: ${inPath}`);
       process.exit(1);
     }
-    await runRender({ storyboardPath: inPath, outputDir, projectRoot: root, force, only, workers });
+    await runRender({ storyboardPath: inPath, outputDir, projectRoot: root, force, only, workers, stitchOnly });
     return;
+  }
+
+  if (cmd === "validate") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
+    const { validateStoryboard, splitFindings } = await import("./validate.ts");
+    const { scoreSlideshowRisk } = await import("./slideshow.ts");
+    const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
+    const { errors, warnings } = splitFindings(validateStoryboard(sb, root, null));
+    for (const w of warnings) console.warn(`⚠ ${w.msg}`);
+    for (const e of errors) console.error(`✗ ${e.msg}`);
+    const risk = scoreSlideshowRisk(sb, root);
+    console.log(`\n幻灯片风险 ${risk.average}(${risk.verdict})`);
+    for (const [k, d] of Object.entries(risk.dimensions)) console.log(`  · ${k} [${d.score.toFixed(1)}] ${d.reason}`);
+    console.log(errors.length ? `\n✗ 校验未通过:${errors.length} 个致命问题` : `\n✓ 结构校验通过${warnings.length ? `(${warnings.length} 条提醒)` : ""}`);
+    process.exit(errors.length ? 1 : 0);
+  }
+
+  if (cmd === "review") {
+    const flags = parseFlags(rest);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const outputDir = path.resolve(root, "output");
+    if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
+    const { reviewFinal, summarizeReport } = await import("./review.ts");
+    const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
+    const qa = await reviewFinal(sb, outputDir, root);
+    console.log(summarizeReport(qa));
+    for (const f of qa.findings) console.log(`  ${f.level === "error" ? "✗" : f.level === "warn" ? "⚠" : "·"} ${f.msg}`);
+    console.log(`\n报告: output/qa-report.json · 抽样帧: output/qa/`);
+    process.exit(qa.status === "fail" ? 1 : 0);
   }
 
   console.error(`Unknown command: ${cmd}`);

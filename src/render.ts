@@ -17,13 +17,16 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { METHOD_RENDERERS } from "./methods/registry.ts";
 import type { MethodRenderer, RenderContext } from "./methods/registry.ts";
 import type { Scene, Storyboard } from "./types.ts";
 import { hardenHyperFrames } from "./harden.ts";
 import { resolveDesign, resolveSceneDesign } from "./methods/designs.ts";
 import { lintSource } from "./methods/lint.ts";
+import { run as runProc, runCapture, sleep } from "./proc.ts";
+import { validateStoryboard, splitFindings } from "./validate.ts";
+import { scoreSlideshowRisk } from "./slideshow.ts";
+import { reviewFinal, summarizeReport } from "./review.ts";
 
 interface RenderOpts {
   storyboardPath: string;
@@ -34,26 +37,44 @@ interface RenderOpts {
   only: number | null;
   /** Max concurrent scene renders. Default 1 (sequential). 2-3 recommended. */
   workers?: number;
+  /** Skip scene rendering and only (re)stitch already-rendered scenes → final.mp4. */
+  stitchOnly?: boolean;
+  /** Skip the pre-render structural validation gate (errors normally block a full render). */
+  skipValidate?: boolean;
+  /** Progress callback (done, total, label) — drives the daemon's task bar. */
+  onProgress?: (done: number, total: number, label: string) => void;
+  /** Per-line subprocess output sink — drives the daemon's live task log. */
+  onLine?: (line: string) => void;
 }
+
+// Per-render output sink. Tasks are serialized by the daemon (FIFO), so a
+// module-level holder is safe and avoids threading onLine through every helper.
+let RENDER_IO: { onLine?: (line: string) => void } = {};
+
+// Watchdog timeouts. A render that stalls (e.g. on an un-vendored CDN) is
+// killed instead of hanging for minutes. Overridable via env for slow hosts.
+const HF_TIMEOUT_MS = Number(process.env.PIPELINE_HF_TIMEOUT_MS) || 8 * 60_000;
+const RM_TIMEOUT_MS = Number(process.env.PIPELINE_RM_TIMEOUT_MS) || 12 * 60_000;
+const FFMPEG_TIMEOUT_MS = Number(process.env.PIPELINE_FFMPEG_TIMEOUT_MS) || 10 * 60_000;
+// Brief settle between consecutive hyperframes renders so Chromium fully exits
+// before the next launch (cheap insurance against any browser-cleanup overlap).
+const SETTLE_MS = Number(process.env.PIPELINE_SETTLE_MS ?? 400);
 
 function sha1(s: string): string {
   return crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);
 }
 
-function run(cmd: string, args: string[], cwd: string): void {
-  console.log(`[run] ${cmd} ${args.join(" ")}  (cwd=${path.relative(process.cwd(), cwd) || "."})`);
-  const r = spawnSync(cmd, args, { cwd, stdio: "inherit" });
-  if (r.status !== 0) {
-    throw new Error(`Command failed: ${cmd} ${args.join(" ")} (exit ${r.status})`);
-  }
+/** Thin wrapper over the async process runner with the active render's log sink. */
+function sh(cmd: string, args: string[], cwd: string, timeoutMs: number, label: string): Promise<void> {
+  return runProc(cmd, args, { cwd, timeoutMs, label, onLine: RENDER_IO.onLine });
 }
 
-function renderHyperFramesScene(
+async function renderHyperFramesScene(
   sceneDir: string,
   html: string,
   sideFiles: Record<string, string> | undefined,
   outMp4: string
-): void {
+): Promise<void> {
   // Portability/determinism pass: bundle CJK fonts + vendor CDN libs so the
   // scene renders identically on Docker/Linux/CI/offline (not just this Mac).
   const hardened = hardenHyperFrames(html, sideFiles);
@@ -86,10 +107,16 @@ function renderHyperFramesScene(
   // via @font-face url() in injected CSS, so hardenHyperFrames' bundled CJK
   // fonts 404 and Chinese silently falls back to a system font (tofu off-Mac).
   // 0.6.x embeds them per the documented fonts/ + @font-face mechanism.
-  run("npx", ["--yes", "hyperframes@0.6.7", "render", "--output", path.resolve(outMp4)], sceneDir);
+  await sh(
+    "npx",
+    ["--yes", "hyperframes@0.6.7", "render", "--output", path.resolve(outMp4)],
+    sceneDir,
+    HF_TIMEOUT_MS,
+    `hyperframes 渲染 ${path.basename(sceneDir)}`
+  );
 }
 
-function renderRemotionScene(
+async function renderRemotionScene(
   sceneDir: string,
   tsx: string,
   compId: string,
@@ -100,7 +127,7 @@ function renderRemotionScene(
   durationSec: number,
   outMp4: string,
   sideFiles?: Record<string, string>
-): void {
+): Promise<void> {
   fs.mkdirSync(path.join(sceneDir, "src"), { recursive: true });
   fs.mkdirSync(path.join(sceneDir, "public"), { recursive: true });
   // Copy side files (image / video / lottie assets that Remotion's staticFile() will look up).
@@ -201,8 +228,8 @@ Config.setPixelFormat("yuv420p");
   );
 
   // Install + render
-  run("npm", ["install", "--silent", "--no-audit", "--no-fund"], sceneDir);
-  run(
+  await sh("npm", ["install", "--silent", "--no-audit", "--no-fund"], sceneDir, RM_TIMEOUT_MS, `npm install ${path.basename(sceneDir)}`);
+  await sh(
     "npx",
     [
       "--yes",
@@ -214,7 +241,9 @@ Config.setPixelFormat("yuv420p");
       `--props=${JSON.stringify(props)}`,
       "--concurrency=4",
     ],
-    sceneDir
+    sceneDir,
+    RM_TIMEOUT_MS,
+    `remotion 渲染 ${path.basename(sceneDir)}`
   );
 }
 
@@ -226,16 +255,18 @@ interface SceneClip {
   transitionDur: number;
 }
 
-function stitchScenes(scenePaths: string[], outFinal: string): void {
+async function stitchScenes(scenePaths: string[], outFinal: string): Promise<void> {
   if (scenePaths.length === 0) return;
   // Concat demuxer with -c copy is the fastest path for hard-cut stitching.
   const listPath = path.join(path.dirname(outFinal), "concat.txt");
   const list = scenePaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n");
   fs.writeFileSync(listPath, list);
-  run(
+  await sh(
     "ffmpeg",
     ["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", outFinal],
-    path.dirname(outFinal)
+    path.dirname(outFinal),
+    FFMPEG_TIMEOUT_MS,
+    "ffmpeg 拼接(concat)"
   );
 }
 
@@ -245,7 +276,7 @@ function stitchScenes(scenePaths: string[], outFinal: string): void {
  * but supports crossfade/wipe/dip-to-black). We only fall into this path when
  * needed; otherwise stitchScenes() is faster.
  */
-function stitchScenesWithTransitions(clips: SceneClip[], outFinal: string): void {
+async function stitchScenesWithTransitions(clips: SceneClip[], outFinal: string): Promise<void> {
   if (clips.length === 0) return;
   if (clips.length === 1) {
     fs.copyFileSync(clips[0].path, outFinal);
@@ -288,7 +319,7 @@ function stitchScenesWithTransitions(clips: SceneClip[], outFinal: string): void
   }
 
   const filterStr = filterSteps.join(";");
-  run(
+  await sh(
     "ffmpeg",
     [
       "-y",
@@ -309,7 +340,9 @@ function stitchScenesWithTransitions(clips: SceneClip[], outFinal: string): void
       "20",
       outFinal,
     ],
-    path.dirname(outFinal)
+    path.dirname(outFinal),
+    FFMPEG_TIMEOUT_MS,
+    "ffmpeg 拼接(转场 xfade)"
   );
 }
 
@@ -318,9 +351,9 @@ function stitchScenesWithTransitions(clips: SceneClip[], outFinal: string): void
  * Run AFTER audio mix as a final pass — produces a *.burned.mp4 alongside.
  */
 /** Check which subtitle-burn-capable filters this ffmpeg build supports. */
-function ffmpegFilterCapabilities(): { hasSubtitles: boolean; hasDrawtext: boolean } {
-  const r = spawnSync("ffmpeg", ["-hide_banner", "-filters"], { encoding: "utf8" });
-  if (r.status !== 0) return { hasSubtitles: false, hasDrawtext: false };
+async function ffmpegFilterCapabilities(): Promise<{ hasSubtitles: boolean; hasDrawtext: boolean }> {
+  const r = await runCapture("ffmpeg", ["-hide_banner", "-filters"], { timeoutMs: 15_000 });
+  if (r.code !== 0) return { hasSubtitles: false, hasDrawtext: false };
   const out = r.stdout || "";
   return {
     hasSubtitles: /^\s*\S+\s+subtitles\b/m.test(out),
@@ -328,8 +361,8 @@ function ffmpegFilterCapabilities(): { hasSubtitles: boolean; hasDrawtext: boole
   };
 }
 
-function ffmpegHasSubtitlesFilter(): boolean {
-  return ffmpegFilterCapabilities().hasSubtitles;
+async function ffmpegHasSubtitlesFilter(): Promise<boolean> {
+  return (await ffmpegFilterCapabilities()).hasSubtitles;
 }
 
 /** Parse our generated SRT into cue objects for the drawtext fallback. */
@@ -396,8 +429,8 @@ function cjkBurnFont(): { name: string; file: string | null } {
   return { name, file: candidates.find((p) => fs.existsSync(p)) ?? null };
 }
 
-function burnSubtitles(videoIn: string, srtPath: string, outBurned: string): void {
-  if (ffmpegHasSubtitlesFilter()) {
+async function burnSubtitles(videoIn: string, srtPath: string, outBurned: string): Promise<void> {
+  if (await ffmpegHasSubtitlesFilter()) {
     // ───── Path A: libass-based subtitles filter ─────
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-burn-"));
     try {
@@ -407,13 +440,13 @@ function burnSubtitles(videoIn: string, srtPath: string, outBurned: string): voi
       fs.copyFileSync(videoIn, tmpVideo);
       fs.copyFileSync(srtPath, tmpSrt);
       const style = `FontName=${cjkBurnFont().name},FontSize=18,PrimaryColour=&H00F4EAD0,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40`;
-      run("ffmpeg", [
+      await sh("ffmpeg", [
         "-y", "-loglevel", "error",
         "-i", "in.mp4",
         "-vf", `subtitles=subs.srt:force_style='${style}'`,
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-c:a", "copy", "out.mp4",
-      ], tmpDir);
+      ], tmpDir, FFMPEG_TIMEOUT_MS, "ffmpeg 烧字幕(libass)");
       fs.copyFileSync(tmpOut, outBurned);
       return;
     } finally {
@@ -422,7 +455,7 @@ function burnSubtitles(videoIn: string, srtPath: string, outBurned: string): voi
   }
 
   // ───── Path B: drawtext fallback (libass not compiled) ─────
-  const caps = ffmpegFilterCapabilities();
+  const caps = await ffmpegFilterCapabilities();
   if (!caps.hasDrawtext) {
     console.warn("[burn] ffmpeg has neither `subtitles` (libass) nor `drawtext` (libfreetype) filter.");
     console.warn("[burn] skipping burn-in — final.mp4 is unaffected. To enable: brew tap homebrew-ffmpeg/ffmpeg && brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libass --with-freetype");
@@ -457,14 +490,14 @@ function burnSubtitles(videoIn: string, srtPath: string, outBurned: string): voi
   });
   const filter = drawtexts.join(",");
 
-  run("ffmpeg", [
+  await sh("ffmpeg", [
     "-y", "-loglevel", "error",
     "-i", videoIn,
     "-vf", filter,
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
     "-c:a", "copy",
     outBurned,
-  ], path.dirname(outBurned));
+  ], path.dirname(outBurned), FFMPEG_TIMEOUT_MS, "ffmpeg 烧字幕(drawtext)");
 }
 
 
@@ -484,13 +517,13 @@ interface VoiceEntry {
  * differs from scene.startSec when xfade transitions overlap clips. If absent,
  * scene.startSec is used as-is (hard-cut concat path).
  */
-function buildVoiceTrack(
+async function buildVoiceTrack(
   voiceTrackPath: string,
   totalSec: number,
   projectRoot: string,
   outPath: string,
   perceivedStarts?: Map<number, number>
-): boolean {
+): Promise<boolean> {
   if (!fs.existsSync(voiceTrackPath)) return false;
   const track = JSON.parse(fs.readFileSync(voiceTrackPath, "utf8")) as {
     scenes: VoiceEntry[];
@@ -515,7 +548,7 @@ function buildVoiceTrack(
   ffArgs.push("-t", totalSec.toFixed(2));
   ffArgs.push("-c:a", "libmp3lame", "-b:a", "192k");
   ffArgs.push(outPath);
-  run("ffmpeg", ffArgs, path.dirname(outPath));
+  await sh("ffmpeg", ffArgs, path.dirname(outPath), FFMPEG_TIMEOUT_MS, "ffmpeg 合成配音轨");
   return true;
 }
 
@@ -559,13 +592,13 @@ function computePerceivedTimeline(
  *
  * Returns true on success, false if no audio sources were provided.
  */
-function mixFinal(
+async function mixFinal(
   videoIn: string,
   voicePath: string | null,
   bgmPath: string | null,
   outFinal: string,
   totalSec: number
-): boolean {
+): Promise<boolean> {
   if (!voicePath && !bgmPath) return false;
   const args: string[] = ["-y", "-loglevel", "error", "-i", videoIn];
   const filterParts: string[] = [];
@@ -598,12 +631,183 @@ function mixFinal(
   args.push("-map", "0:v", "-map", "[aout]");
   args.push("-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest");
   args.push(outFinal);
-  run("ffmpeg", args, path.dirname(outFinal));
+  await sh("ffmpeg", args, path.dirname(outFinal), FFMPEG_TIMEOUT_MS, "ffmpeg 混音(配音+BGM)");
   return true;
 }
 
+function srtTimestamp(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  const ms = Math.round((sec - Math.floor(sec)) * 1000);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+}
+
+/**
+ * Stitch every rendered scene into output/final.mp4 (+ audio mix, sidecar SRT,
+ * optional subtitle burn). Shared by the full-render path AND the stitch-only
+ * path, so "拼接整片" never re-renders scenes — it reuses the reliable
+ * per-scene MP4s. The perceived timeline (xfade overlaps) is recomputed fresh
+ * from `sb` every call, so it stays correct after scene edits/reorders.
+ *
+ * `renderedPaths` are absolute scene MP4 paths in scene order.
+ */
+async function stitchFinal(
+  sb: Storyboard,
+  outputDir: string,
+  projectRoot: string,
+  renderedPaths: string[]
+): Promise<void> {
+  const silentPath = path.join(outputDir, "final-silent.mp4");
+  const finalPath = path.join(outputDir, "final.mp4");
+
+  // Choose stitch path: pure concat (fast) if every scene transition is "cut",
+  // otherwise xfade chain (slower but supports fade/wipe/dip).
+  const clips: SceneClip[] = sb.scenes.map((sc, i) => ({
+    path: path.resolve(projectRoot, sc.renderedPath!),
+    durationSec: sc.durationSec,
+    transition: i === 0 ? "cut" : (sc.transition ?? "cut"),
+    transitionDur: sc.transitionDur ?? (sc.transition === "dip-to-black" ? 0.6 : 0.4),
+  }));
+  const anyTransition = clips.some((c) => c.transition !== "cut");
+  const sceneIndices = sb.scenes.map((s) => s.index);
+  let perceivedStarts: Map<number, number> | undefined;
+  let perceivedTotal: number;
+  if (anyTransition) {
+    console.log(`\n=== Stitching ${clips.length} scenes WITH transitions → ${silentPath} ===`);
+    await stitchScenesWithTransitions(clips, silentPath);
+    const tl = computePerceivedTimeline(clips, sceneIndices);
+    perceivedStarts = tl.perceivedStarts;
+    perceivedTotal = tl.perceivedTotalSec;
+    console.log(`   perceived total (after xfades): ${perceivedTotal.toFixed(2)}s (raw=${(sb.scenes.at(-1)?.endSec ?? 0).toFixed(2)}s)`);
+  } else {
+    console.log(`\n=== Stitching ${clips.length} scenes (all cuts) → ${silentPath} ===`);
+    await stitchScenes(renderedPaths, silentPath);
+    perceivedTotal = sb.scenes.at(-1)?.endSec ?? 0;
+  }
+
+  // Audio mix step — uses output/voice-track.json (from `pipeline tts`)
+  // and output/bgm.mp3 (from `pipeline bgm`) if they exist. With transitions,
+  // each scene's voice starts at its PERCEIVED time (xfades pull clips earlier).
+  const voiceTrackPath = path.join(outputDir, "voice-track.json");
+  const bgmPath = path.join(outputDir, "bgm.mp3");
+  const totalSec = perceivedTotal;
+
+  let voiceMixedPath: string | null = null;
+  if (fs.existsSync(voiceTrackPath)) {
+    voiceMixedPath = path.join(outputDir, "voice-mixed.mp3");
+    console.log(`=== Building voice track (${totalSec.toFixed(1)}s with ${perceivedStarts ? "perceived" : "raw"} delays) ===`);
+    const built = await buildVoiceTrack(voiceTrackPath, totalSec, projectRoot, voiceMixedPath, perceivedStarts);
+    if (!built) voiceMixedPath = null;
+  }
+  const bgmExists = fs.existsSync(bgmPath);
+
+  if (voiceMixedPath || bgmExists) {
+    console.log(`=== Mixing audio → ${finalPath}  (voice=${!!voiceMixedPath}, bgm=${bgmExists}) ===`);
+    await mixFinal(silentPath, voiceMixedPath, bgmExists ? bgmPath : null, finalPath, totalSec);
+    console.log(`✓ Final video with audio: ${finalPath}`);
+  } else {
+    // No audio sources — silent video is the final
+    fs.copyFileSync(silentPath, finalPath);
+    console.log(`✓ Final video (silent): ${finalPath}`);
+    console.log(`  (run \`pipeline tts\` and/or \`pipeline bgm\` then re-render to add audio)`);
+  }
+
+  // Always write a sidecar SRT covering ALL scenes — works in any video player.
+  // Uses the perceived timeline (which accounts for xfade overlaps), so cues
+  // align with what the viewer actually sees.
+  {
+    const sidecarSrt = path.join(outputDir, "final.srt");
+    const lines: string[] = [];
+    let idx = 1;
+    for (const sc of sb.scenes) {
+      const perceivedStart = perceivedStarts?.get(sc.index) ?? sc.startSec;
+      const perceivedEnd = perceivedStart + sc.durationSec;
+      lines.push(`${idx++}`, `${srtTimestamp(perceivedStart)} --> ${srtTimestamp(perceivedEnd)}`, sc.text, "");
+    }
+    fs.writeFileSync(sidecarSrt, lines.join("\n"));
+    console.log(`✓ Sidecar subtitles: ${sidecarSrt} (open in VLC/QuickTime alongside the mp4)`);
+  }
+
+  // Optional: also try to BURN subtitles for any scene flagged burnSubtitle=true.
+  // Only renders if local ffmpeg has libass / libfreetype.
+  const burnedScenes = sb.scenes.filter((sc) => sc.burnSubtitle);
+  if (burnedScenes.length) {
+    const burnedSrt = path.join(outputDir, "burned-cues.srt");
+    const lines: string[] = [];
+    let idx = 1;
+    for (const sc of burnedScenes) {
+      const perceivedStart = perceivedStarts?.get(sc.index) ?? sc.startSec;
+      const perceivedEnd = perceivedStart + sc.durationSec;
+      lines.push(`${idx++}`, `${srtTimestamp(perceivedStart)} --> ${srtTimestamp(perceivedEnd)}`, sc.text, "");
+    }
+    fs.writeFileSync(burnedSrt, lines.join("\n"));
+    const burnedOut = path.join(outputDir, "final-subtitled.mp4");
+    console.log(`=== Attempt burning subtitles for ${burnedScenes.length} flagged scene(s) → ${burnedOut} ===`);
+    try {
+      await burnSubtitles(finalPath, burnedSrt, burnedOut);
+      if (fs.existsSync(burnedOut)) {
+        console.log(`✓ Final with burned subtitles: ${burnedOut}`);
+      } else {
+        console.log(`  (burn-in skipped — see warning above; sidecar final.srt still produced)`);
+      }
+    } catch (e) {
+      console.warn(`[burn] burn-in failed but sidecar SRT is fine: ${(e as Error).message}`);
+    }
+  }
+
+  // ─── Post-render self-review (看真实产物) ──────────────────────────────
+  // Actually inspect the finished final.mp4 (ffprobe + frame sampling + audio
+  // levels) and write output/qa-report.json. Never throws — a review hiccup
+  // must not fail a good render.
+  try {
+    const qa = await reviewFinal(sb, outputDir, projectRoot, perceivedTotal);
+    console.log(summarizeReport(qa));
+    for (const fnd of qa.findings.filter((x) => x.level !== "info")) {
+      console.log(`   ${fnd.level === "error" ? "✗" : "⚠"} ${fnd.msg}`);
+    }
+    console.log(`   自检报告: ${path.relative(projectRoot, path.join(outputDir, "qa-report.json"))}  (抽样帧在 output/qa/)`);
+  } catch (e) {
+    console.warn(`[review] 自检异常(不影响成片): ${(e as Error).message}`);
+  }
+}
+
 export async function runRender(opts: RenderOpts): Promise<void> {
+  RENDER_IO = { onLine: opts.onLine };
+  try {
+    await runRenderInner(opts);
+  } finally {
+    RENDER_IO = {};
+  }
+}
+
+async function runRenderInner(opts: RenderOpts): Promise<void> {
   const sb: Storyboard = JSON.parse(fs.readFileSync(opts.storyboardPath, "utf8"));
+
+  // ─── Stitch-only path ──────────────────────────────────────────────
+  // Re-assemble final.mp4 from already-rendered scenes WITHOUT re-rendering.
+  // This is the reliable "拼接整片" / "看整片" route: per-scene MP4s are made by
+  // the rock-solid single-scene render, then concatenated here. No approval
+  // gate (no new compute is spent) — but every scene must already be rendered.
+  if (opts.stitchOnly) {
+    const missing = sb.scenes.filter(
+      (s) => !s.renderedPath || !fs.existsSync(path.resolve(opts.projectRoot, s.renderedPath)),
+    );
+    if (!sb.scenes.length) throw new Error("没有镜头可拼接。");
+    if (missing.length) {
+      throw new Error(
+        `无法拼接整片:还有 ${missing.length} 个镜头未渲染(#${missing.map((s) => s.index).join("、#")})。` +
+          `请先「全部渲染」或逐镜「渲染此条」,再拼接。`,
+      );
+    }
+    const renderedPaths = sb.scenes.map((s) => path.resolve(opts.projectRoot, s.renderedPath!));
+    opts.onProgress?.(0, 1, "拼接整片");
+    await stitchFinal(sb, opts.outputDir, opts.projectRoot, renderedPaths);
+    sb.stages.rendered = true;
+    fs.writeFileSync(opts.storyboardPath, JSON.stringify(sb, null, 2));
+    opts.onProgress?.(1, 1, "整片完成");
+    return;
+  }
 
   // ─── Approval gate ─────────────────────────────────────────────────
   // Rendering is irreversible (uses TTS/render compute), so require explicit
@@ -617,6 +821,30 @@ export async function runRender(opts: RenderOpts): Promise<void> {
    Tip: any 'pipeline analyze' or 'pipeline edit' resets approval; you re-approve once you're happy.
 `);
     throw new Error("storyboard 已分析但未确认 — 用 force 覆盖,或先确认(UI 点「全部渲染」会自动视为确认)");
+  }
+
+  // ─── Pre-render validation gate (full renders only) ─────────────────
+  // Fail a structurally-broken storyboard in milliseconds instead of after
+  // minutes of wasted render + a silently-broken final.mp4. Single-scene
+  // renders (only=N) stay gate-free — they're the fast iterative path.
+  if (!opts.skipValidate && opts.only == null) {
+    const { errors, warnings } = splitFindings(validateStoryboard(sb, opts.projectRoot, null));
+    for (const w of warnings) console.warn(`[validate] ⚠ ${w.msg}`);
+    if (errors.length) {
+      for (const e of errors) console.error(`[validate] ✗ ${e.msg}`);
+      if (!opts.force) {
+        throw new Error(`渲染前校验未通过:${errors.length} 个致命问题(见上)。修好分镜后再渲,或用 force 跳过。`);
+      }
+      console.warn(`[validate] force 已开 — 忽略 ${errors.length} 个校验错误继续渲染`);
+    }
+    // Slideshow-risk is advisory only (never blocks).
+    const risk = scoreSlideshowRisk(sb, opts.projectRoot);
+    if (risk.average >= 2.5) {
+      console.warn(`[slideshow] 幻灯片风险 ${risk.average}(${risk.verdict}):`);
+      for (const [k, d] of Object.entries(risk.dimensions)) if (d.score >= 2.5) console.warn(`   · ${k}: ${d.reason}`);
+    } else {
+      console.log(`[slideshow] 幻灯片风险 ${risk.average}(${risk.verdict}) — 通过`);
+    }
   }
 
   const ctx: RenderContext = {
@@ -683,28 +911,36 @@ export async function runRender(opts: RenderOpts): Promise<void> {
     const { scene, sceneDir, mp4Path, out } = job;
     console.log(`[scene ${scene.index}/${sb.scenes.length}] rendering via ${scene.method} (${out.engine})`);
     if (out.engine === "hyperframes") {
-      renderHyperFramesScene(sceneDir, out.html, out.sideFiles, mp4Path);
+      await renderHyperFramesScene(sceneDir, out.html, out.sideFiles, mp4Path);
     } else {
-      renderRemotionScene(
+      await renderRemotionScene(
         sceneDir, out.tsx, out.compId, out.props,
         ctx.width, ctx.height, ctx.fps, scene.durationSec, mp4Path, out.sideFiles,
       );
     }
   }
 
+  let doneCount = 0;
   if (workers <= 1) {
     // Sequential — preserve current behavior + readable logs.
     for (const job of jobs) {
+      opts.onProgress?.(doneCount, jobs.length, `渲染镜头 #${job.scene.index}/${sb.scenes.length}`);
       try {
         await execute(job);
         job.scene.renderedPath = path.relative(opts.projectRoot, job.mp4Path);
         job.scene.renderedHash = job.srcHash;
         job.scene.status = "rendered";
         renderedByIndex.set(job.scene.index, job.mp4Path);
+        // Persist incrementally so a crash/timeout mid-run keeps earlier scenes,
+        // and the daemon's storyboard reflects per-scene progress immediately.
+        fs.writeFileSync(opts.storyboardPath, JSON.stringify(sb, null, 2));
       } catch (e) {
         job.scene.status = "failed";
         console.error(`[scene ${job.scene.index}] render failed:`, (e as Error).message);
       }
+      opts.onProgress?.(++doneCount, jobs.length, `镜头 #${job.scene.index} 完成`);
+      // Settle between consecutive hyperframes renders so Chromium fully exits.
+      if (job.out.engine === "hyperframes" && SETTLE_MS > 0) await sleep(SETTLE_MS);
     }
   } else {
     // Concurrent — bounded pool. Each worker pulls the next job until empty.
@@ -720,10 +956,16 @@ export async function runRender(opts: RenderOpts): Promise<void> {
           job.scene.renderedHash = job.srcHash;
           job.scene.status = "rendered";
           renderedByIndex.set(job.scene.index, job.mp4Path);
+          fs.writeFileSync(opts.storyboardPath, JSON.stringify(sb, null, 2));
         } catch (e) {
           job.scene.status = "failed";
           console.error(`[worker ${workerId}] scene ${job.scene.index} failed:`, (e as Error).message);
         }
+        opts.onProgress?.(++doneCount, jobs.length, `镜头 #${job.scene.index} 完成`);
+        // Same per-worker settle as the sequential path so this worker lets its
+        // Chromium exit before launching the next scene. (Cross-worker overlap is
+        // inherent to --workers > 1 and is the user's explicit speed/contention tradeoff.)
+        if (job.out.engine === "hyperframes" && SETTLE_MS > 0) await sleep(SETTLE_MS);
       }
     }
     await Promise.all(Array.from({ length: workers }, (_, i) => workerLoop(i + 1)));
@@ -741,117 +983,8 @@ export async function runRender(opts: RenderOpts): Promise<void> {
   fs.writeFileSync(opts.storyboardPath, JSON.stringify(sb, null, 2));
 
   if (opts.only === null && renderedPaths.length === sb.scenes.length) {
-    const silentPath = path.join(opts.outputDir, "final-silent.mp4");
-    const finalPath = path.join(opts.outputDir, "final.mp4");
-
-    // Choose stitch path: pure concat (fast) if every scene transition is "cut",
-    // otherwise xfade chain (slower but supports fade/wipe/dip).
-    const clips: SceneClip[] = sb.scenes.map((sc, i) => ({
-      path: path.resolve(opts.projectRoot, sc.renderedPath!),
-      durationSec: sc.durationSec,
-      transition: i === 0 ? "cut" : (sc.transition ?? "cut"),
-      transitionDur: sc.transitionDur ?? (sc.transition === "dip-to-black" ? 0.6 : 0.4),
-    }));
-    const anyTransition = clips.some((c) => c.transition !== "cut");
-    const sceneIndices = sb.scenes.map((s) => s.index);
-    let perceivedStarts: Map<number, number> | undefined;
-    let perceivedTotal: number;
-    if (anyTransition) {
-      console.log(`\n=== Stitching ${clips.length} scenes WITH transitions → ${silentPath} ===`);
-      stitchScenesWithTransitions(clips, silentPath);
-      const tl = computePerceivedTimeline(clips, sceneIndices);
-      perceivedStarts = tl.perceivedStarts;
-      perceivedTotal = tl.perceivedTotalSec;
-      console.log(`   perceived total (after xfades): ${perceivedTotal.toFixed(2)}s (raw=${(sb.scenes.at(-1)?.endSec ?? 0).toFixed(2)}s)`);
-    } else {
-      console.log(`\n=== Stitching ${clips.length} scenes (all cuts) → ${silentPath} ===`);
-      stitchScenes(renderedPaths, silentPath);
-      perceivedTotal = sb.scenes.at(-1)?.endSec ?? 0;
-    }
-
-    // Audio mix step — uses output/voice-track.json (from `pipeline tts`)
-    // and output/bgm.mp3 (from `pipeline bgm`) if they exist. With transitions,
-    // each scene's voice starts at its PERCEIVED time (xfades pull clips earlier).
-    const voiceTrackPath = path.join(opts.outputDir, "voice-track.json");
-    const bgmPath = path.join(opts.outputDir, "bgm.mp3");
-    const totalSec = perceivedTotal;
-
-    let voiceMixedPath: string | null = null;
-    if (fs.existsSync(voiceTrackPath)) {
-      voiceMixedPath = path.join(opts.outputDir, "voice-mixed.mp3");
-      console.log(`=== Building voice track (${totalSec.toFixed(1)}s with ${perceivedStarts ? "perceived" : "raw"} delays) ===`);
-      const built = buildVoiceTrack(voiceTrackPath, totalSec, opts.projectRoot, voiceMixedPath, perceivedStarts);
-      if (!built) voiceMixedPath = null;
-    }
-    const bgmExists = fs.existsSync(bgmPath);
-
-    if (voiceMixedPath || bgmExists) {
-      console.log(`=== Mixing audio → ${finalPath}  (voice=${!!voiceMixedPath}, bgm=${bgmExists}) ===`);
-      mixFinal(silentPath, voiceMixedPath, bgmExists ? bgmPath : null, finalPath, totalSec);
-      console.log(`✓ Final video with audio: ${finalPath}`);
-    } else {
-      // No audio sources — silent video is the final
-      fs.copyFileSync(silentPath, finalPath);
-      console.log(`✓ Final video (silent): ${finalPath}`);
-      console.log(`  (run \`pipeline tts\` and/or \`pipeline bgm\` then re-render to add audio)`);
-    }
-
-    // Always write a sidecar SRT covering ALL scenes — works in any video player.
-    // Uses the perceived timeline (which accounts for xfade overlaps), so cues
-    // align with what the viewer actually sees.
-    {
-      const sidecarSrt = path.join(opts.outputDir, "final.srt");
-      const lines: string[] = [];
-      const t = (sec: number) => {
-        const h = Math.floor(sec / 3600);
-        const m = Math.floor((sec % 3600) / 60);
-        const s = Math.floor(sec % 60);
-        const ms = Math.round((sec - Math.floor(sec)) * 1000);
-        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
-      };
-      let idx = 1;
-      for (const sc of sb.scenes) {
-        const perceivedStart = perceivedStarts?.get(sc.index) ?? sc.startSec;
-        const perceivedEnd = perceivedStart + sc.durationSec;
-        lines.push(`${idx++}`, `${t(perceivedStart)} --> ${t(perceivedEnd)}`, sc.text, "");
-      }
-      fs.writeFileSync(sidecarSrt, lines.join("\n"));
-      console.log(`✓ Sidecar subtitles: ${sidecarSrt} (open in VLC/QuickTime alongside the mp4)`);
-    }
-
-    // Optional: also try to BURN subtitles for any scene flagged burnSubtitle=true.
-    // Only renders if local ffmpeg has libass / libfreetype.
-    const burnedScenes = sb.scenes.filter((sc) => sc.burnSubtitle);
-    if (burnedScenes.length) {
-      const burnedSrt = path.join(opts.outputDir, "burned-cues.srt");
-      const lines: string[] = [];
-      const t = (sec: number) => {
-        const h = Math.floor(sec / 3600);
-        const m = Math.floor((sec % 3600) / 60);
-        const s = Math.floor(sec % 60);
-        const ms = Math.round((sec - Math.floor(sec)) * 1000);
-        return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
-      };
-      let idx = 1;
-      for (const sc of burnedScenes) {
-        const perceivedStart = perceivedStarts?.get(sc.index) ?? sc.startSec;
-        const perceivedEnd = perceivedStart + sc.durationSec;
-        lines.push(`${idx++}`, `${t(perceivedStart)} --> ${t(perceivedEnd)}`, sc.text, "");
-      }
-      fs.writeFileSync(burnedSrt, lines.join("\n"));
-      const burnedOut = path.join(opts.outputDir, "final-subtitled.mp4");
-      console.log(`=== Attempt burning subtitles for ${burnedScenes.length} flagged scene(s) → ${burnedOut} ===`);
-      try {
-        burnSubtitles(finalPath, burnedSrt, burnedOut);
-        if (fs.existsSync(burnedOut)) {
-          console.log(`✓ Final with burned subtitles: ${burnedOut}`);
-        } else {
-          console.log(`  (burn-in skipped — see warning above; sidecar final.srt still produced)`);
-        }
-      } catch (e) {
-        console.warn(`[burn] burn-in failed but sidecar SRT is fine: ${(e as Error).message}`);
-      }
-    }
+    opts.onProgress?.(jobs.length, jobs.length, "拼接整片");
+    await stitchFinal(sb, opts.outputDir, opts.projectRoot, renderedPaths);
   } else if (opts.only !== null) {
     console.log(`\n✓ Single scene rendered. Run without --only to restitch the final video.`);
   } else {

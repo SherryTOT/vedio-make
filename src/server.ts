@@ -50,6 +50,8 @@ import { listProviders } from "./providers/registry.ts";
 import { DESIGNS, DEFAULT_DESIGN_ID } from "./methods/designs.ts";
 import { lintStoryboard } from "./methods/lint.ts";
 import { buildFcpxml, buildEdl } from "./export_nle.ts";
+import { validateStoryboard } from "./validate.ts";
+import { scoreSlideshowRisk } from "./slideshow.ts";
 
 const VERSION = "0.2.0";
 
@@ -73,6 +75,7 @@ const taskEvents = new EventEmitter();
 taskEvents.setMaxListeners(50);
 
 function makeTask(projectId: string, op: string): Task {
+  pruneTasks();
   const t: Task = {
     id: crypto.randomBytes(6).toString("hex"),
     projectId,
@@ -84,6 +87,16 @@ function makeTask(projectId: string, op: string): Task {
   };
   tasks.set(t.id, t);
   return t;
+}
+
+/** Keep the task map bounded — drop the oldest finished tasks past a cap. */
+function pruneTasks(): void {
+  const CAP = 120;
+  if (tasks.size < CAP) return;
+  const finished = [...tasks.values()]
+    .filter((t) => t.status === "succeeded" || t.status === "failed" || t.status === "cancelled")
+    .sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0));
+  for (const t of finished.slice(0, tasks.size - 80)) tasks.delete(t.id);
 }
 
 function pushLog(t: Task, line: string): void {
@@ -263,6 +276,29 @@ async function runTaskBody(t: Task, body: any): Promise<void> {
         projectRoot: proj.dir,
         force: body.force ?? false,
         only: body.only ?? null,
+        onProgress: (done, total, label) => {
+          t.progressPct = total > 0 ? Math.min(95, Math.round((done / total) * 90)) : 50;
+          t.message = label;
+          taskEvents.emit(t.id, t);
+        },
+        onLine: (line) => pushLog(t, line),
+      });
+      break;
+    case "stitch":
+      // Re-assemble final.mp4 from already-rendered scenes — no re-render.
+      await runRender({
+        storyboardPath: sbPath,
+        outputDir: path.join(proj.dir, "output"),
+        projectRoot: proj.dir,
+        force: true,
+        only: null,
+        stitchOnly: true,
+        onProgress: (done, total, label) => {
+          t.progressPct = total > 0 ? Math.min(95, Math.round((done / total) * 90)) : 50;
+          t.message = label;
+          taskEvents.emit(t.id, t);
+        },
+        onLine: (line) => pushLog(t, line),
       });
       break;
     case "storyboard":
@@ -273,7 +309,26 @@ async function runTaskBody(t: Task, body: any): Promise<void> {
   }
 }
 
+// Global FIFO task chain — task bodies run ONE AT A TIME. Two reasons:
+//  1. captureLogs() hijacks the process-global console.log/error; overlapping
+//     tasks would clobber each other's handlers and lose logs.
+//  2. Renders (hyperframes/npx/chrome, ffmpeg) shouldn't contend for the same
+//     browser/cache/CPU. Serializing keeps each render fast and deterministic.
+// The daemon stays responsive because each body awaits async subprocesses
+// (src/proc.ts) and yields the event loop — only the WORK is serialized, not
+// the HTTP server.
+let taskChain: Promise<void> = Promise.resolve();
+
+function enqueueTask(t: Task, body: any): void {
+  taskChain = taskChain.then(() => dispatchTask(t, body)).catch(() => {});
+}
+
 async function dispatchTask(t: Task, body: any): Promise<void> {
+  // A task cancelled while still queued never runs.
+  if (t.cancelRequested) {
+    setStatus(t, "cancelled", "已取消(排队中取消)");
+    return;
+  }
   setStatus(t, "running");
   try {
     await captureLogs(t, () => runTaskBody(t, body));
@@ -502,6 +557,17 @@ export async function startServer(opts: {
           return sendJson(res, 200, { scenes: lintStoryboard(sb, proj.dir) });
         }
 
+        // Pre-render validation gate + slideshow-risk score (advisory, no render).
+        if (req.method === "POST" && sub === "/validate") {
+          const sbPath = path.join(proj.dir, "output/storyboard.json");
+          if (!fs.existsSync(sbPath)) return sendJson(res, 404, { error: "no storyboard yet" });
+          const sb = JSON.parse(fs.readFileSync(sbPath, "utf8"));
+          return sendJson(res, 200, {
+            validate: validateStoryboard(sb, proj.dir, null),
+            slideshow: scoreSlideshowRisk(sb, proj.dir),
+          });
+        }
+
         // Export an NLE timeline (FCPXML / CMX3600 EDL) of the rendered scenes.
         const expM = sub.match(/^\/export\/(fcpxml|edl)$/);
         if (req.method === "GET" && expM) {
@@ -520,13 +586,13 @@ export async function startServer(opts: {
         }
 
         // Enqueue async ops
-        const opRoute = sub.match(/^\/(analyze|research|images|matte|tts|bgm|render|storyboard)$/);
+        const opRoute = sub.match(/^\/(analyze|research|images|matte|tts|bgm|render|stitch|storyboard)$/);
         if (req.method === "POST" && opRoute) {
           const op = opRoute[1];
           const body = JSON.parse((await readBody(req)) || "{}");
           const task = makeTask(projId, op);
-          // Fire async — don't await
-          dispatchTask(task, body).catch(() => {});
+          // Enqueue on the global FIFO chain — runs when prior tasks finish.
+          enqueueTask(task, body);
           return sendJson(res, 202, task);
         }
 
