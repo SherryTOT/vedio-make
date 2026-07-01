@@ -1,5 +1,26 @@
 {
   "$comment": "Method registry — analyzer picks ONE method.id per scene from `methods` list. `wipMethods` are catalog'd but their renderer isn't built yet — DO NOT pick. Reliability: S=skill-backed, A=third-party skill, B=no skill.",
+  "engineGuidance": {
+    "$comment": "HyperFrames↔Remotion 决策矩阵。每个 method 已声明自己的 engine;这张表帮分析器按内容『语法』先想清该用哪种引擎的方法,再从该引擎的 method 里挑。不是硬规则,是倾向。",
+    "hyperframes": {
+      "grammar": "HTML / CSS / GSAP —— 排版、文字动效、卡片版面的天然介质",
+      "preferWhen": [
+        "标题 / 强调词 / 动感字体(kinetic typography)、短 hero/hook",
+        "纯文字字幕、简单出现-淡入(hf-css-fade 是万能兜底)",
+        "产品卡 / 发布反白标题卡 / 逗号分隔的名词列表铺陈",
+        "克制的 CSS 过场与版面网格(贴合印刷工坊设计思维)"
+      ]
+    },
+    "remotion": {
+      "grammar": "React + useCurrentFrame —— 数据可视化与需要精确逐帧编排的复杂组件",
+      "preferWhen": [
+        "数据图表:3–10 个数值的柱/线/表(d3 精确、逐帧可控)",
+        "时间序列 / 趋势",
+        "需要精确逐帧编排的复杂组件、卡片堆叠动画"
+      ]
+    },
+    "note": "两引擎都遵守印刷工坊审美(禁渐变/发光/AI 金光)。同等契合时优先 reliability=S 且更轻的 HyperFrames;只有数据图表/复杂逐帧编排才值得上 Remotion(渲染更重、每镜要 npm install)。"
+  },
   "methods": [
     {
       "id": "hf-kinetic-text",

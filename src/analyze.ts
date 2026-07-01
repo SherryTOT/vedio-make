@@ -79,7 +79,29 @@ function listAssets(dir: string): string[] {
   return out.sort();
 }
 
-function buildSystemPrompt(catalog: { methods: MethodDef[] }, designMd: string): string {
+interface EngineGuidance {
+  hyperframes?: { grammar?: string; preferWhen?: string[] };
+  remotion?: { grammar?: string; preferWhen?: string[] };
+  note?: string;
+}
+
+/** Render the HyperFrames↔Remotion decision matrix (from catalog.engineGuidance) into a prompt block. */
+function engineGuidanceBlock(g?: EngineGuidance): string {
+  if (!g) return "";
+  const side = (name: string, s?: { grammar?: string; preferWhen?: string[] }) =>
+    s ? `${name} — ${s.grammar ?? ""}\n${(s.preferWhen ?? []).map((x) => `    · ${x}`).join("\n")}` : "";
+  return `
+═══════════════════════════════════════════════════════════════════
+ENGINE GRAMMAR (HyperFrames vs Remotion — pick the engine whose grammar fits, then a method in it):
+═══════════════════════════════════════════════════════════════════
+${side("HyperFrames", g.hyperframes)}
+
+${side("Remotion", g.remotion)}
+${g.note ? `\n${g.note}` : ""}
+`;
+}
+
+function buildSystemPrompt(catalog: { methods: MethodDef[]; engineGuidance?: EngineGuidance }, designMd: string): string {
   // Compact method list: just the fields the analyzer needs to decide.
   const methodSummary = catalog.methods
     .map(
@@ -92,7 +114,7 @@ function buildSystemPrompt(catalog: { methods: MethodDef[] }, designMd: string):
     .join("\n\n");
 
   return `You are the analyzer step of a video-generation pipeline. For each subtitle scene the user gives you, pick ONE method from the catalog that best fits the scene's content, narrative role, and duration.
-
+${engineGuidanceBlock(catalog.engineGuidance)}
 ═══════════════════════════════════════════════════════════════════
 METHOD CATALOG (pick "method" from these ids, must match verbatim):
 ═══════════════════════════════════════════════════════════════════
@@ -335,7 +357,7 @@ function buildDiff(
 export async function runAnalyze(opts: AnalyzeOpts): Promise<Storyboard> {
   const sb: Storyboard = JSON.parse(fs.readFileSync(opts.storyboardPath, "utf8"));
   const before = snapshotScenes(sb);
-  const catalog = JSON.parse(fs.readFileSync(opts.catalogPath, "utf8")) as { methods: MethodDef[] };
+  const catalog = JSON.parse(fs.readFileSync(opts.catalogPath, "utf8")) as { methods: MethodDef[]; engineGuidance?: EngineGuidance };
   const designMd = fs.existsSync(opts.designPath)
     ? fs.readFileSync(opts.designPath, "utf8")
     : "(no design.md provided)";
