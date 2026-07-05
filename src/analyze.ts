@@ -18,7 +18,27 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getChat } from "./providers/registry.ts";
+import { METHOD_RENDERERS } from "./methods/registry.ts";
 import type { ChangeEntry, MethodDef, Storyboard } from "./types.ts";
+
+/**
+ * Warn when the catalog (what the analyzer can PICK) and METHOD_RENDERERS (what
+ * can actually RENDER) have drifted apart. A registered-but-uncatalogued method
+ * is dead code the analyzer can never reach; a catalogued-but-unregistered one
+ * would be picked and then crash at render. Cheap Object.keys diff, warn-only.
+ */
+export function reconcileCatalog(catalogMethodIds: string[]): string[] {
+  const catalog = new Set(catalogMethodIds);
+  const rendered = new Set(Object.keys(METHOD_RENDERERS));
+  const warnings: string[] = [];
+  for (const id of rendered) {
+    if (!catalog.has(id)) warnings.push(`方法 '${id}' 已实现但不在 catalog.json — 分析器永远选不到(死代码)。`);
+  }
+  for (const id of catalog) {
+    if (!rendered.has(id)) warnings.push(`方法 '${id}' 在 catalog.json 但无渲染器 — 若被选中会渲染时崩溃。`);
+  }
+  return warnings;
+}
 
 interface AnalyzeOpts {
   storyboardPath: string;
@@ -367,6 +387,10 @@ export async function runAnalyze(opts: AnalyzeOpts): Promise<Storyboard> {
   const byId = new Map(catalog.methods.map((m) => [m.id, m]));
   const sMethods = new Set(catalog.methods.filter((m) => m.reliability === "S").map((m) => m.id));
 
+  // Surface catalog↔renderer drift so an unreachable/uncatalogued method is
+  // visible instead of silently unpickable (or a render-time crash).
+  for (const w of reconcileCatalog(catalog.methods.map((m) => m.id))) console.warn(`[analyze] ⚠ catalog 漂移:${w}`);
+
   const system = buildSystemPrompt(catalog, designMd);
   const user = buildUserPrompt(sb, assets);
 
@@ -420,7 +444,12 @@ export async function runAnalyze(opts: AnalyzeOpts): Promise<Storyboard> {
     sc.reasoning = pick.reasoning?.trim() || null;
     sc.assets = Array.isArray(pick.assets) ? pick.assets : [];
     sc.notes = Array.isArray(pick.notes) ? pick.notes : [];
-    // motion / focus — pass through with light validation
+    // motion / focus — pass through with light validation. This apply path is
+    // AUTHORITATIVE for the scene, so a pick that omits (or nulls) these fields
+    // must CLEAR any value left by a previous analyze run — otherwise stale
+    // motion/focus/voice/matting directives leak into the new render. (The
+    // analyzer's own example output emits null for focus/voice, so this is the
+    // common case, not an edge case.)
     if (pick.motion && pick.motion.kind) {
       const m = pick.motion;
       if (m.ease && /^linear|none$/i.test(m.ease)) {
@@ -433,6 +462,8 @@ export async function runAnalyze(opts: AnalyzeOpts): Promise<Storyboard> {
         intensity: m.intensity ?? "subtle",
         ease: m.ease ?? "power3.inOut",
       };
+    } else {
+      sc.motion = undefined;
     }
     if (pick.focus && pick.focus.kind) {
       sc.focus = {
@@ -442,13 +473,15 @@ export async function runAnalyze(opts: AnalyzeOpts): Promise<Storyboard> {
         radius: pick.focus.radius ?? 0.4,
         dim: pick.focus.dim ?? (pick.focus.kind === "spotlight" ? 0.55 : 0.3),
       };
+    } else {
+      sc.focus = undefined;
     }
     // Transition / voice / subtitle burn — pass through with light validation
     const validT = new Set(["cut", "fade", "dip-to-black", "wipe-left", "wipe-right", "push-up"]);
     sc.transition = pick.transition && validT.has(pick.transition) ? pick.transition : "cut";
-    if (pick.transitionDur && pick.transitionDur > 0 && pick.transitionDur <= 2)
-      sc.transitionDur = pick.transitionDur;
-    if (pick.voice) sc.voice = pick.voice;
+    sc.transitionDur = pick.transitionDur && pick.transitionDur > 0 && pick.transitionDur <= 2
+      ? pick.transitionDur : undefined;
+    sc.voice = pick.voice || undefined;
     sc.burnSubtitle = Boolean(pick.burnSubtitle);
 
     // imageStyle — drives the look of the AI-generated background.
@@ -463,15 +496,16 @@ export async function runAnalyze(opts: AnalyzeOpts): Promise<Storyboard> {
       else if (sc.method === "hf-kinetic-text") sc.imageStyle = "cinematic";
       else sc.imageStyle = "editorial";
     }
-    // Matting intent — only set if the analyzer explicitly opted in.
-    if (typeof pick.needsMatting === "boolean") {
-      sc.needsMatting = pick.needsMatting;
+    // Matting intent — authoritative: clear a previous run's flag when this pick
+    // doesn't opt in, and drop a stale hint whenever matting is off.
+    if (pick.needsMatting === true) {
+      sc.needsMatting = true;
       const validHints = new Set(["human", "object", "product"]);
-      if (pick.mattingHint && validHints.has(pick.mattingHint)) {
-        sc.mattingHint = pick.mattingHint;
-      } else if (pick.needsMatting) {
-        sc.mattingHint = "human"; // sensible default
-      }
+      sc.mattingHint = pick.mattingHint && validHints.has(pick.mattingHint)
+        ? pick.mattingHint : "human"; // sensible default
+    } else {
+      sc.needsMatting = undefined;
+      sc.mattingHint = undefined;
     }
   }
 

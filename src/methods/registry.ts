@@ -22,12 +22,13 @@ import { resolveDesign } from "./designs.ts";
 const BRAND = resolveDesign(undefined);
 
 /** Look up the first generated bg image in scene.assets and return its absolute path. */
-function pickGeneratedBg(scene: Scene): { rel: string; absPath: string } | null {
-  // We resolve via process.cwd() (project root for the CLI). The sideFiles
-  // contract copies whatever path we return to the scene's temp folder.
+function pickGeneratedBg(scene: Scene, ctx: RenderContext): { rel: string; absPath: string } | null {
+  // Resolve against the project root (NOT process.cwd) so the daemon — whose cwd
+  // is the repo root, not the project — finds assets under projects/<id>/assets/.
+  // The sideFiles contract copies whatever path we return to the scene's temp folder.
   for (const rel of scene.assets ?? []) {
     if (!rel.startsWith("generated/")) continue;
-    const abs = path.resolve(process.cwd(), "assets", rel);
+    const abs = path.resolve(ctx.projectRoot, "assets", rel);
     if (fs.existsSync(abs)) return { rel, absPath: abs };
   }
   return null;
@@ -38,6 +39,41 @@ function intensityScale(intensity: "subtle" | "medium" | "strong" | undefined): 
   if (intensity === "strong") return 0.22;
   if (intensity === "medium") return 0.14;
   return 0.06; // subtle default
+}
+
+/** Rec.709 relative luma of a #rrggbb hex (0–255); 128 if unparseable. */
+function relLuma(hex: string): number {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex || "").trim());
+  if (!m) return 128;
+  const n = parseInt(m[1], 16);
+  return 0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255);
+}
+
+/**
+ * Readable text color for text that sits OVER the dark photo veil the image
+ * methods paint (rgba(5,3,8,~0.8)). The design's `ink` is dark on every light
+ * preset (inkwork/swiss/magazine/claywarm) → near-invisible on that veil, so
+ * pick the lighter of ink/paper: a dark-inked light design yields its paper
+ * (light), a light-inked dark design (nocturne) keeps its ink. Preserves each
+ * preset's character without ever going unreadable.
+ */
+function onVeilText(d: ResolvedDesign): string {
+  return relLuma(d.ink) >= relLuma(d.paper) ? d.ink : d.paper;
+}
+
+/** Darkest of ink/paper — for text on an intentionally fixed-light card (so a
+ *  light-inked dark preset like nocturne still gets readable dark text there).
+ *  Yields #1b1612 for inkwork, i.e. zero change to the default look. */
+function onLightCardText(d: ResolvedDesign): string {
+  return relLuma(d.ink) <= relLuma(d.paper) ? d.ink : d.paper;
+}
+
+/** GSAP ease is interpolated raw into a generated <script>; a stray quote/newline
+ *  would break the whole scene's timeline. Allow only ease-name characters,
+ *  otherwise fall back to the house default. */
+function sanitizeEase(ease: string | undefined): string {
+  const e = (ease || "").trim();
+  return e.length > 0 && e.length <= 40 && /^[A-Za-z0-9_.\-(),% ]+$/.test(e) ? e : "power3.inOut";
 }
 
 /**
@@ -54,7 +90,7 @@ function buildMotionScript(scene: Scene): string {
   const m = scene.motion;
   if (!m || m.kind === "still") return "";
   const dur = scene.durationSec;
-  const ease = m.ease || "power3.inOut";
+  const ease = sanitizeEase(m.ease);
   const delta = intensityScale(m.intensity);
   const hasFg = Boolean(scene.foreground);
 
@@ -122,8 +158,12 @@ function buildFocusOverlay(scene: Scene): { css: string; html: string } {
     };
   }
   if (f.kind === "dof") {
+    // 'dof' (lens blur) is a glass effect the 印刷工坊 aesthetic bans and the 土味
+    // lint flags (backdrop-filter:blur). Honor the analyzer's intent — pull the
+    // eye to a point — with a FLAT radial dim instead of a blur: no glass, no
+    // lint self-flag, consistent with vignette/spotlight.
     return {
-      css: `.focus-overlay { position: absolute; inset: 0; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); mask: radial-gradient(circle at ${x}% ${y}%, transparent ${(parseFloat(r) * 0.7).toFixed(0)}%, black ${r}%); -webkit-mask: radial-gradient(circle at ${x}% ${y}%, transparent ${(parseFloat(r) * 0.7).toFixed(0)}%, black ${r}%); pointer-events: none; z-index: 1; }`,
+      css: `.focus-overlay { position: absolute; inset: 0; background: radial-gradient(ellipse at ${x}% ${y}%, rgba(0,0,0,0) ${(parseFloat(r) * 0.7).toFixed(0)}%, rgba(0,0,0,${dim}) 100%); pointer-events: none; z-index: 1; }`,
       html: `<div class="focus-overlay" data-layout-ignore></div>`,
     };
   }
@@ -131,9 +171,9 @@ function buildFocusOverlay(scene: Scene): { css: string; html: string } {
 }
 
 /** Resolve foreground (matted PNG) — full absolute path or null. */
-function pickForeground(scene: Scene): { rel: string; absPath: string } | null {
+function pickForeground(scene: Scene, ctx: RenderContext): { rel: string; absPath: string } | null {
   if (!scene.foreground) return null;
-  const abs = path.resolve(process.cwd(), "assets", scene.foreground);
+  const abs = path.resolve(ctx.projectRoot, "assets", scene.foreground);
   if (!fs.existsSync(abs)) return null;
   return { rel: scene.foreground, absPath: abs };
 }
@@ -144,6 +184,9 @@ export interface RenderContext {
   fps: number;
   /** Project root, used to resolve asset paths */
   projectRoot: string;
+  /** Project title — used for editorial chrome (poster/mountain stamps) instead
+   *  of hardcoded demo branding. Optional; methods fall back to a neutral label. */
+  projectTitle?: string;
   /** Resolved style tokens for THIS scene (project preset + per-scene override). */
   design: ResolvedDesign;
 }
@@ -181,8 +224,8 @@ const hfCssFade: MethodRenderer = (scene, ctx) => {
         `<div class="line line-${i}">${escapeHtml(l)}</div>`
     )
     .join("\n      ");
-  const bgImage = pickGeneratedBg(scene);
-  const fg = pickForeground(scene);
+  const bgImage = pickGeneratedBg(scene, ctx);
+  const fg = pickForeground(scene, ctx);
   const motionScript = buildMotionScript(scene);
   const focusOverlay = buildFocusOverlay(scene);
   const sideFiles: Record<string, string> = {};
@@ -198,15 +241,15 @@ const hfCssFade: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #f6f5f1; color: #1b1612; font-family: "Noto Serif SC", "Songti SC", "PingFang SC", serif; -webkit-font-smoothing: antialiased; }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: ${ctx.design.paper}; color: ${ctx.design.ink}; font-family: ${ctx.design.serif}; -webkit-font-smoothing: antialiased; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; padding: 0 130px; gap: 16px; }
-  .bg { position: absolute; inset: 0; background: #f6f5f1; }
-  .kicker { position: absolute; left: 130px; top: ${Math.round(ctx.height * 0.16)}px; display: flex; align-items: center; gap: 16px; font-family: "Noto Sans SC", -apple-system, sans-serif; font-size: ${Math.round(ctx.height * 0.017)}px; font-weight: 700; letter-spacing: 0.26em; color: #9e5326; }
-  .kicker .bar { display: inline-block; width: 52px; height: 3px; background: #c36c36; transform-origin: 0 50%; }
+  .bg { position: absolute; inset: 0; background: ${ctx.design.paper}; }
+  .kicker { position: absolute; left: 130px; top: ${Math.round(ctx.height * 0.16)}px; display: flex; align-items: center; gap: 16px; font-family: ${ctx.design.sans}; font-size: ${Math.round(ctx.height * 0.017)}px; font-weight: 700; letter-spacing: 0.26em; color: ${ctx.design.accent2}; }
+  .kicker .bar { display: inline-block; width: 52px; height: 3px; background: ${ctx.design.accent}; transform-origin: 0 50%; }
   ${bgImage ? `.bg-img { position: absolute; inset: 0; background-image: url('bg.png'); background-size: cover; background-position: center; opacity: 0.55; filter: saturate(0.85) brightness(0.7); will-change: transform; } .bg-veil { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(5,3,8,0.4) 0%, rgba(5,3,8,0.78) 100%); z-index: 1; }` : ""}
   ${fg ? `.fg-img { position: absolute; left: 12%; top: 18%; width: 56%; height: 64%; background-image: url('fg.png'); background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 2; filter: drop-shadow(0 20px 40px rgba(0,0,0,0.5)); }` : ""}
   ${focusOverlay.css}
-  .line { position: relative; font-size: 62px; font-weight: 600; line-height: 1.55; letter-spacing: 0.01em; text-align: left; color: #1b1612; opacity: 0; max-width: ${ctx.width - 260}px; z-index: 3; }
+  .line { position: relative; font-size: 62px; font-weight: 600; line-height: 1.55; letter-spacing: 0.01em; text-align: left; color: ${bgImage ? onVeilText(ctx.design) : ctx.design.ink}; opacity: 0; max-width: ${ctx.width - 260}px; z-index: 3; }
 </style>
 </head>
 <body>
@@ -245,8 +288,8 @@ const hfKineticText: MethodRenderer = (scene, ctx) => {
   const wordEls = segments
     .map((seg, i) => `<span class="w" data-i="${i}">${escapeHtml(seg)}</span>`)
     .join("\n      ");
-  const bgImage = pickGeneratedBg(scene);
-  const fg = pickForeground(scene);
+  const bgImage = pickGeneratedBg(scene, ctx);
+  const fg = pickForeground(scene, ctx);
   const motionScript = buildMotionScript(scene);
   const focusOverlay = buildFocusOverlay(scene);
   const sideFiles: Record<string, string> = {};
@@ -263,14 +306,14 @@ const hfKineticText: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #f6f5f1; color: #1b1612; font-family: "Noto Serif SC", "Songti SC", "PingFang SC", serif; -webkit-font-smoothing: antialiased; }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: ${ctx.design.paper}; color: ${ctx.design.ink}; font-family: ${ctx.design.serif}; -webkit-font-smoothing: antialiased; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; align-items: center; justify-content: center; }
-  .bg { position: absolute; inset: 0; background: #f6f5f1; }
+  .bg { position: absolute; inset: 0; background: ${ctx.design.paper}; }
   ${bgImage ? `.bg-img { position: absolute; inset: 0; background-image: url('bg.png'); background-size: cover; background-position: center; opacity: 0.92; filter: saturate(1.0) brightness(0.92) contrast(1.05); will-change: transform; } .bg-veil { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 60%, rgba(0,0,0,0.0) 30%, rgba(5,3,8,0.55) 95%); z-index: 1; }` : ""}
   ${fg ? `.fg-img { position: absolute; left: 60%; top: 12%; width: 36%; height: 76%; background-image: url('fg.png'); background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 2; filter: drop-shadow(0 24px 48px rgba(0,0,0,0.6)); }` : ""}
   ${focusOverlay.css}
   .stage { display: flex; flex-wrap: wrap; gap: 8px 4px; padding: 0 120px; justify-content: center; max-width: ${ctx.width - 200}px; position: relative; z-index: 3; }
-  .w { font-size: 110px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.14; opacity: 0; transform-origin: 50% 100%; color: #1b1612; }
+  .w { font-size: 110px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.14; opacity: 0; transform-origin: 50% 100%; color: ${bgImage ? onVeilText(ctx.design) : ctx.design.ink}; }
 </style>
 </head>
 <body>
@@ -307,11 +350,14 @@ const rmD3BarChart: MethodRenderer = (scene, ctx) => {
   const items = scene.data?.items?.length
     ? scene.data.items.slice(0, 7).map((it) => ({ label: String(it.label), value: Number(it.value) }))
     : [
-        { label: "A", value: 30 },
-        { label: "B", value: 45 },
-        { label: "C", value: 22 },
-        { label: "D", value: 38 },
-        { label: "E", value: 51 },
+        // Visibly-placeholder sample so it's obvious no real data was supplied
+        // (run `pipeline research` / 检索数据, or fill scene.data) — not fabricated
+        // numbers masquerading as fact.
+        { label: "示例 A", value: 30 },
+        { label: "示例 B", value: 45 },
+        { label: "示例 C", value: 22 },
+        { label: "示例 D", value: 38 },
+        { label: "示例 E", value: 51 },
       ];
 
   return {
@@ -383,16 +429,6 @@ export const Scene: React.FC<Props> = ({ title, data }) => {
             );
           })}
         </g>
-        <defs>
-          <linearGradient id="gradBar" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#d4a64a" />
-            <stop offset="100%" stopColor="#78461e" />
-          </linearGradient>
-          <linearGradient id="gradPeak" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#f4d479" />
-            <stop offset="100%" stopColor="#b87f1f" />
-          </linearGradient>
-        </defs>
       </svg>
     </AbsoluteFill>
   );
@@ -412,8 +448,8 @@ const hfAnimeScatter: MethodRenderer = (scene, ctx) => {
   const tiles = items
     .map((s, i) => `<div class="tile" data-i="${i}">${escapeHtml(s)}</div>`)
     .join("\n      ");
-  const bgImage = pickGeneratedBg(scene);
-  const fg = pickForeground(scene);
+  const bgImage = pickGeneratedBg(scene, ctx);
+  const fg = pickForeground(scene, ctx);
   const motionScript = buildMotionScript(scene);
   const focusOverlay = buildFocusOverlay(scene);
   const sideFiles: Record<string, string> = {};
@@ -430,18 +466,18 @@ const hfAnimeScatter: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #f6f5f1; color: #1b1612; font-family: "Noto Serif SC", "Songti SC", "PingFang SC", serif; -webkit-font-smoothing: antialiased; }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: ${ctx.design.paper}; color: ${ctx.design.ink}; font-family: ${ctx.design.serif}; -webkit-font-smoothing: antialiased; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; align-items: center; justify-content: center; }
-  .bg { position: absolute; inset: 0; background: #f6f5f1; }
+  .bg { position: absolute; inset: 0; background: ${ctx.design.paper}; }
   ${bgImage ? `.bg-img { position: absolute; inset: 0; background-image: url('bg.png'); background-size: cover; background-position: center; opacity: 0.45; filter: saturate(0.7) brightness(0.6); will-change: transform; } .bg-veil { position: absolute; inset: 0; background: radial-gradient(ellipse at 30% 70%, rgba(0,0,0,0.15) 0%, rgba(5,3,8,0.78) 75%); z-index: 1; }` : ""}
   ${fg ? `.fg-img { position: absolute; left: 70%; top: 14%; width: 26%; height: 72%; background-image: url('fg.png'); background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 2; filter: drop-shadow(0 18px 38px rgba(0,0,0,0.5)); }` : ""}
   ${focusOverlay.css}
   .grid { display: flex; flex-wrap: wrap; gap: 18px 22px; padding: 0 140px; justify-content: center; max-width: ${ctx.width - 200}px; position: relative; z-index: 3; }
   .tile {
     padding: 16px 30px; font-size: 44px; font-weight: 600; letter-spacing: 0.02em;
-    background: #ffffff; color: #1b1612;
-    border: 1px solid rgba(27,22,18,0.14);
-    border-left: 3px solid #c36c36;
+    background: ${ctx.design.pw}; color: ${ctx.design.ink};
+    border: 1px solid ${ctx.design.line};
+    border-left: 3px solid ${ctx.design.accent};
     border-radius: 4px;
     opacity: 0;
   }
@@ -483,8 +519,8 @@ const hfAnimeScatter: MethodRenderer = (scene, ctx) => {
 // hf-waapi-marker — highlight a phrase with a gold marker sweep
 // ──────────────────────────────────────────────────────────────────────────
 const hfWaapiMarker: MethodRenderer = (scene, ctx) => {
-  const bgImage = pickGeneratedBg(scene);
-  const fg = pickForeground(scene);
+  const bgImage = pickGeneratedBg(scene, ctx);
+  const fg = pickForeground(scene, ctx);
   const motionScript = buildMotionScript(scene);
   const focusOverlay = buildFocusOverlay(scene);
   const sideFiles: Record<string, string> = {};
@@ -500,16 +536,16 @@ const hfWaapiMarker: MethodRenderer = (scene, ctx) => {
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: #f6f5f1; color: #1b1612; font-family: "Noto Serif SC", "Songti SC", "PingFang SC", serif; -webkit-font-smoothing: antialiased; }
+  html, body { width: ${ctx.width}px; height: ${ctx.height}px; overflow: hidden; background: ${ctx.design.paper}; color: ${ctx.design.ink}; font-family: ${ctx.design.serif}; -webkit-font-smoothing: antialiased; }
   #root { position: relative; width: ${ctx.width}px; height: ${ctx.height}px; display: flex; align-items: center; justify-content: center; }
-  .bg { position: absolute; inset: 0; background: #f6f5f1; }
+  .bg { position: absolute; inset: 0; background: ${ctx.design.paper}; }
   ${bgImage ? `.bg-img { position: absolute; inset: 0; background-image: url('bg.png'); background-size: cover; background-position: center; opacity: 0.45; filter: saturate(0.8) brightness(0.55); will-change: transform; } .bg-veil { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 55%, rgba(0,0,0,0.1) 0%, rgba(5,3,8,0.82) 70%); z-index: 1; }` : ""}
   ${fg ? `.fg-img { position: absolute; left: 16%; top: 10%; width: 28%; height: 80%; background-image: url('fg.png'); background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 2; filter: drop-shadow(0 22px 44px rgba(0,0,0,0.6)); }` : ""}
   ${focusOverlay.css}
   .phrase {
     position: relative; padding: 12px 18px;
     font-size: 86px; font-weight: 700; letter-spacing: 0.02em;
-    color: #1b1612; line-height: 1.28;
+    color: ${bgImage ? onVeilText(ctx.design) : ctx.design.ink}; line-height: 1.28;
     max-width: ${ctx.width - 240}px; text-align: center;
     opacity: 0;
     z-index: 3;
@@ -517,7 +553,7 @@ const hfWaapiMarker: MethodRenderer = (scene, ctx) => {
   .marker {
     position: absolute; left: 0; bottom: 12px;
     height: 26px; width: 0%;
-    background: rgba(195,108,54,0.30);
+    background: ${ctx.design.accent}; opacity: 0.30;
     z-index: -1;
     transform-origin: 0 50%;
     border-radius: 2px;
@@ -572,12 +608,15 @@ const rmD3LineTrend: MethodRenderer = (scene, ctx) => {
         })),
       }
     : {
+        // Visibly-placeholder sample. Colors come from the design's chartPalette
+        // (NOT a hardcoded gold/purple AI palette — the old one literally tripped
+        // the 土味 lint's ai-palette rule on the registry's own output).
         years: ["2018", "2019", "2020", "2021", "2022", "2023", "2024"],
         series: [
-          { name: "GSAP",    color: "#f4d479", values: [1.0, 1.2, 1.4, 1.6, 1.9, 2.2, 2.5] },
-          { name: "Anime.js", color: "#d4a64a", values: [0.20, 0.30, 0.40, 0.50, 0.60, 0.65, 0.70] },
-          { name: "Framer",   color: "#9b6cff", values: [0.05, 0.10, 0.20, 0.40, 0.60, 0.80, 0.95] },
-          { name: "Lottie",   color: "#5fc4f4", values: [0.15, 0.20, 0.25, 0.28, 0.30, 0.32, 0.33] },
+          { name: "示例 A", color: PALETTE[0], values: [1.0, 1.2, 1.4, 1.6, 1.9, 2.2, 2.5] },
+          { name: "示例 B", color: PALETTE[1], values: [0.20, 0.30, 0.40, 0.50, 0.60, 0.65, 0.70] },
+          { name: "示例 C", color: PALETTE[2], values: [0.05, 0.10, 0.20, 0.40, 0.60, 0.80, 0.95] },
+          { name: "示例 D", color: PALETTE[3], values: [0.15, 0.20, 0.25, 0.28, 0.30, 0.32, 0.33] },
         ],
       };
   return {
@@ -801,7 +840,7 @@ const rmImageKenburns: MethodRenderer = (scene, ctx) => {
     // Fall back to css-fade if no image — keeps the pipeline producing.
     return hfCssFade(scene, ctx);
   }
-  const absPath = path.resolve(process.cwd(), "assets", imgAsset);
+  const absPath = path.resolve(ctx.projectRoot, "assets", imgAsset);
   const fileName = path.basename(absPath);
   // Pick a kenburns spec from scene.motion (analyzer-set); fall back to mild in-zoom.
   const m = scene.motion ?? { kind: "kenburns", direction: "in", intensity: "subtle", ease: "power3.inOut" };
@@ -861,7 +900,7 @@ export const Scene: React.FC<Props> = ({ title, startScale, endScale, fromX, toX
       <div style={{
         position: "absolute", left: 0, right: 0, bottom: "12%",
         textAlign: "center", fontSize: 64, fontWeight: 500, letterSpacing: "0.04em",
-        color: "${ctx.design.ink}", textShadow: "0 4px 22px rgba(0,0,0,0.7)",
+        color: "${onVeilText(ctx.design)}", textShadow: "0 4px 22px rgba(0,0,0,0.7)",
         opacity: titleOpacity, transform: \`translateY(\${titleY}px)\`,
         padding: "0 120px",
       }}>{title}</div>
@@ -878,7 +917,7 @@ export const Scene: React.FC<Props> = ({ title, startScale, endScale, fromX, toX
 const rmVideoClip: MethodRenderer = (scene, ctx) => {
   const videoAsset = (scene.assets ?? []).find((a) => /\.(mp4|mov|webm)$/i.test(a));
   if (!videoAsset) return hfCssFade(scene, ctx);
-  const absPath = path.resolve(process.cwd(), "assets", videoAsset);
+  const absPath = path.resolve(ctx.projectRoot, "assets", videoAsset);
   const fileName = path.basename(absPath);
   return {
     engine: "remotion",
@@ -913,9 +952,11 @@ export const Scene: React.FC<Props> = ({ title }) => {
 // hf-lottie-play — HyperFrames + lottie-web for a .lottie or .json animation
 // ──────────────────────────────────────────────────────────────────────────
 const hfLottiePlay: MethodRenderer = (scene, ctx) => {
-  const lottieAsset = (scene.assets ?? []).find((a) => /\.(lottie|json)$/i.test(a));
+  // Only plain .json Lottie files — lottie-web cannot load a .lottie (dotLottie
+  // zip), which would leave a silently blank stage. Fall back to css-fade otherwise.
+  const lottieAsset = (scene.assets ?? []).find((a) => /\.json$/i.test(a));
   if (!lottieAsset) return hfCssFade(scene, ctx);
-  const absPath = path.resolve(process.cwd(), "assets", lottieAsset);
+  const absPath = path.resolve(ctx.projectRoot, "assets", lottieAsset);
   const fileName = "anim" + path.extname(absPath); // local file alongside index.html
   return {
     engine: "hyperframes",
@@ -1047,14 +1088,14 @@ const hfTailwindCard: MethodRenderer = (scene, ctx) => {
 // the picture has a SIDE, the text has a SIDE, they don't fight each other.
 // ──────────────────────────────────────────────────────────────────────────
 const hfPosterHero: MethodRenderer = (scene, ctx) => {
-  const bgImage = pickGeneratedBg(scene);
+  const bgImage = pickGeneratedBg(scene, ctx);
   if (!bgImage) return hfKineticText(scene, ctx);
 
   const m = scene.motion ?? { kind: "kenburns", direction: "in", intensity: "subtle", ease: "power3.inOut" };
   const intensity = m.intensity === "strong" ? 0.18 : m.intensity === "medium" ? 0.10 : 0.05;
   const startScale = m.direction === "out" ? 1 + intensity : 1;
   const endScale   = m.direction === "out" ? 1 : 1 + intensity;
-  const ease = m.ease || "power3.inOut";
+  const ease = sanitizeEase(m.ease);
 
   // Display copy: hero text is the cue itself. Caption / subtitle from
   // scene.notes if provided, else sensible defaults so the poster has chrome.
@@ -1169,7 +1210,7 @@ const hfPosterHero: MethodRenderer = (scene, ctx) => {
     <div class="rule" id="r2"></div>
     <div class="subtitle" id="sub">${escapeHtml(subtitle)}</div>
   </div>
-  <div class="stamp" id="stamp">山海 · MMXXVI · IMG ${String(scene.index).padStart(3, "0")}</div>
+  <div class="stamp" id="stamp">${ctx.projectTitle ? escapeHtml(ctx.projectTitle) + " · " : ""}IMG ${String(scene.index).padStart(3, "0")}</div>
 
   <script>
     window.__timelines = window.__timelines || {};
@@ -1211,8 +1252,8 @@ const hfPosterHero: MethodRenderer = (scene, ctx) => {
 // Requires scene.foreground (a matte of the bg). Falls back to poster-hero.
 // ──────────────────────────────────────────────────────────────────────────
 const hfMountainReveal: MethodRenderer = (scene, ctx) => {
-  const bgImage = pickGeneratedBg(scene);
-  const fg = pickForeground(scene);
+  const bgImage = pickGeneratedBg(scene, ctx);
+  const fg = pickForeground(scene, ctx);
   // Needs both the full plate AND a matte of it to do the occlusion trick.
   if (!bgImage || !fg) return hfPosterHero(scene, ctx);
 
@@ -1221,9 +1262,9 @@ const hfMountainReveal: MethodRenderer = (scene, ctx) => {
   const kb = m.intensity === "strong" ? 0.12 : m.intensity === "medium" ? 0.08 : 0.055;
   const kbStart = m.direction === "out" ? 1 + kb : 1;
   const kbEnd   = m.direction === "out" ? 1 : 1 + kb;
-  const ease = m.ease || "power2.inOut";
+  const ease = sanitizeEase(m.ease);
 
-  const caption  = scene.notes?.[0] ?? "山海行记 · CHAPTER 01";
+  const caption  = scene.notes?.[0] ?? (ctx.projectTitle ? `${ctx.projectTitle} · 第 ${String(scene.index).padStart(2, "0")} 帧` : `第 ${String(scene.index).padStart(2, "0")} 帧`);
   const subtitle = scene.notes?.[1] ?? "A CINEMATIC FRAME";
 
   // Timeline beats (seconds), clamped so short scenes still resolve.
@@ -1258,15 +1299,9 @@ const hfMountainReveal: MethodRenderer = (scene, ctx) => {
     will-change: transform;
     filter: saturate(1.06) contrast(1.10) brightness(0.92);
   }
-  /* Layer 1 — volumetric glow behind the peak (screen-blended) */
-  .glow {
-    position: absolute; left: 50%; top: 30%;
-    width: 70%; height: 55%;
-    transform: translate(-50%, -50%);
-    background: radial-gradient(ellipse at center, rgba(255,196,110,0.55) 0%, rgba(255,170,90,0.20) 35%, rgba(255,170,90,0) 70%);
-    mix-blend-mode: screen; z-index: 1; opacity: 0.55;
-    will-change: opacity, transform;
-  }
+  /* (Removed the screen-blended volumetric glow — the 印刷工坊 aesthetic bans
+     glow/AI-shimmer, and the 土味 lint's glow rule can't even see mix-blend-mode
+     glows, so it was slipping through.) */
   /* Layer 2 — the title that rises from behind the mountain */
   .title-wrap {
     position: absolute; left: 0; right: 0; top: 23%;
@@ -1345,7 +1380,6 @@ const hfMountainReveal: MethodRenderer = (scene, ctx) => {
 <body>
 <div id="root" data-composition-id="main" data-start="0" data-duration="${dur}" data-width="${ctx.width}" data-height="${ctx.height}">
   <div class="bg-img" data-layout-ignore></div>
-  <div class="glow" id="glow" data-layout-ignore></div>
   <div class="title-wrap" id="tw" data-layout-ignore><span class="title">${escapeHtml(scene.text)}</span></div>
   <div class="mist" id="mist" data-layout-ignore></div>
   <div class="fg-mtn" data-layout-ignore></div>
@@ -1356,7 +1390,7 @@ const hfMountainReveal: MethodRenderer = (scene, ctx) => {
   <div class="chrome subtitle" id="sub" data-layout-ignore>${escapeHtml(subtitle)}</div>
   <div class="bar bar-top" data-layout-ignore></div>
   <div class="bar bar-bot" data-layout-ignore></div>
-  <div class="stamp" id="stamp" data-layout-ignore>山海 · MMXXVI · NO.${String(scene.index).padStart(3, "0")}</div>
+  <div class="stamp" id="stamp" data-layout-ignore>${ctx.projectTitle ? escapeHtml(ctx.projectTitle) + " · " : ""}NO.${String(scene.index).padStart(3, "0")}</div>
 
   <script>
     window.__timelines = window.__timelines || {};
@@ -1384,11 +1418,6 @@ const hfMountainReveal: MethodRenderer = (scene, ctx) => {
     tl.fromTo(".title",
       { letterSpacing: "0.18em", opacity: 0.0 },
       { letterSpacing: "0.05em", opacity: 1, duration: ${(dRise * 0.7).toFixed(2)}, ease: "power2.out" }, ${tRise.toFixed(2)});
-
-    // Glow swells as the title clears the peak (the cinematic punctuation).
-    tl.fromTo("#glow", { opacity: 0.32, scale: 0.92 },
-      { opacity: 0.85, scale: 1.06, duration: ${(dRise * 0.9).toFixed(2)}, ease: "power2.out" }, ${(tRise + dRise * 0.25).toFixed(2)});
-    tl.to("#glow", { opacity: 0.6, duration: ${Math.max(0.6, dur - tRise - dRise).toFixed(2)}, ease: "sine.inOut" }, ">");
 
     // Mist drifts across the seam during the rise.
     tl.fromTo("#mist", { opacity: 0, x: -60 },
@@ -1420,7 +1449,7 @@ const hfMountainReveal: MethodRenderer = (scene, ctx) => {
 // ──────────────────────────────────────────────────────────────────────────
 const hfLineReveal: MethodRenderer = (scene, ctx) => {
   const W = ctx.width, H = ctx.height;
-  const PALETTE = [ctx.design.accent, "#1b1612", "#8a8174", ctx.design.accent2, "#3f8f5e"];
+  const PALETTE = ctx.design.chartPalette;
   const hasData = scene.data?.years && scene.data?.series;
   const years: string[] = hasData
     ? scene.data!.years!.map(String)
@@ -1521,7 +1550,7 @@ const hfLineReveal: MethodRenderer = (scene, ctx) => {
     background: color-mix(in srgb, ${ctx.design.accent} 22%, transparent); border-radius: 4px; z-index: 0;
     transform: scaleX(0); transform-origin: 0 50%;
   }
-  .t-hl span.tx { position: relative; z-index: 1; font-size: 60px; font-weight: 700; color: #1b1612; letter-spacing: 0.02em; }
+  .t-hl span.tx { position: relative; z-index: 1; font-size: 60px; font-weight: 700; color: ${onLightCardText(ctx.design)}; letter-spacing: 0.02em; }
   .t-sub { margin-top: 12px; font-size: 22px; font-weight: 600; letter-spacing: 0.34em; color: #9aa1ad; }
   .legend { position: absolute; left: 0; right: 0; top: 232px; text-align: center; }
   .chip {
@@ -1627,9 +1656,9 @@ const hfChapterCard: MethodRenderer = (scene, ctx) => {
     display: flex; flex-direction: column; justify-content: center; align-items: center;
     background: ${ctx.design.paper}; }
   .vig { display: none; }
-  .chapno { font-family: ${ctx.design.sans}; font-size: 28px; letter-spacing: 0.34em; color: ${ctx.design.terra2}; opacity: 0;
+  .chapno { font-family: ${ctx.design.sans}; font-size: 28px; letter-spacing: 0.34em; color: ${ctx.design.accent2}; opacity: 0;
     font-weight: 600; margin-bottom: 30px; padding-left: 0.34em; }
-  .rule { width: 0; height: 3px; background: ${ctx.design.terra};
+  .rule { width: 0; height: 3px; background: ${ctx.design.accent};
     margin: 30px 0; border-radius: 0; }
   .titlecn { font-size: 158px; font-weight: ${ctx.design.displayWeight}; letter-spacing: 0.04em; line-height: 1.06;
     font-family: ${ctx.design.display === "serif" ? ctx.design.serif : ctx.design.sans};
@@ -1637,7 +1666,7 @@ const hfChapterCard: MethodRenderer = (scene, ctx) => {
   .titleen { font-family: ${ctx.design.sans}; font-size: 30px; letter-spacing: 0.34em; text-transform: uppercase;
     color: ${ctx.design.muted}; opacity: 0; margin-top: 10px; }
   .years { font-family: ${ctx.design.sans}; margin-top: 44px; font-size: 24px; font-weight: 600; letter-spacing: 0.1em;
-    color: ${ctx.design.pw}; background: ${ctx.design.terra}; padding: 8px 26px; border-radius: 4px; opacity: 0; }
+    color: ${ctx.design.pw}; background: ${ctx.design.accent}; padding: 8px 26px; border-radius: 4px; opacity: 0; }
 </style>
 </head>
 <body>
@@ -1708,12 +1737,12 @@ const hfStatCounter: MethodRenderer = (scene, ctx) => {
   .vig { display: none; }
   .ring { position: absolute; width: 740px; height: 740px; border-radius: 50%;
     border: 1.5px solid ${ctx.design.line}; opacity: 0; }
-  .sub { font-family: ${ctx.design.sans}; font-size: 28px; font-weight: 600; letter-spacing: 0.16em; color: ${ctx.design.terra2}; opacity: 0; margin-bottom: 22px; }
+  .sub { font-family: ${ctx.design.sans}; font-size: 28px; font-weight: 600; letter-spacing: 0.16em; color: ${ctx.design.accent2}; opacity: 0; margin-bottom: 22px; }
   .numwrap { display: flex; align-items: baseline; opacity: 0; }
   .num { font-size: 260px; font-weight: ${ctx.design.displayWeight}; line-height: 1; letter-spacing: 0.01em;
     font-variant-numeric: tabular-nums; font-family: ${ctx.design.numberFamily === "serif" ? ctx.design.serif : ctx.design.sans}; color: ${ctx.design.ink}; }
-  .pre { font-size: 120px; font-weight: 700; color: ${ctx.design.terra}; margin-right: 10px; }
-  .suf { font-size: 108px; font-weight: 600; color: ${ctx.design.terra}; margin-left: 14px; }
+  .pre { font-size: 120px; font-weight: 700; color: ${ctx.design.accent}; margin-right: 10px; }
+  .suf { font-size: 108px; font-weight: 600; color: ${ctx.design.accent}; margin-left: 14px; }
   .label { font-family: ${ctx.design.sans}; font-size: 40px; font-weight: 600; color: ${ctx.design.ink2}; opacity: 0; margin-top: 40px; letter-spacing: 0.04em; }
 </style>
 </head>

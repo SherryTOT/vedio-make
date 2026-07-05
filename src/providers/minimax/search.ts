@@ -9,7 +9,7 @@
  */
 
 import type { SearchClient } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 export const minimaxSearch: SearchClient = {
   id: "minimax",
@@ -27,7 +27,7 @@ export const minimaxSearch: SearchClient = {
     };
     const userMsg = { role: "user" as const, content: query };
 
-    const resp = await fetch(`${cfg.base_url}/chat/completions`, {
+    const resp = await fetchT(`${cfg.base_url}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.api_key}`,

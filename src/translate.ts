@@ -137,6 +137,19 @@ export async function runTranslate(opts: TranslateOpts): Promise<void> {
       sc.cues = sc.cues.map((c, i) => i === 0 ? { ...c, text: t.trim() } : c);
     }
   }
+  if (missing > 0) {
+    // A truncated reply left some scenes untranslated. Writing the CACHEABLE
+    // storyboard.<lang>.json would freeze a mixed-language board that every later
+    // run treats as a cache hit (line ~102) → poisons downstream tts/render.
+    // Write a clearly-partial file and fail loudly so the user re-runs instead.
+    const partial = path.join(opts.outputDir, `storyboard.${opts.targetLang}.partial.json`);
+    fs.writeFileSync(partial, JSON.stringify(translated, null, 2));
+    throw new Error(
+      `翻译不完整:${missing}/${sb.scenes.length} 个镜头未翻译(模型回复可能被截断)。` +
+      `已存为 ${path.relative(process.cwd(), partial)}(不当缓存);请重跑 \`pipeline translate --force\`(长稿建议分批)。`,
+    );
+  }
+
   fs.writeFileSync(outSb, JSON.stringify(translated, null, 2));
 
   // Sidecar SRT

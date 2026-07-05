@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AssetClient, AssetSearchResult } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 const TYPE_MAP: Record<string, string> = {
   photo: "photo",
@@ -34,7 +34,7 @@ export const pixabayAsset: AssetClient = {
     if (!isVideo && TYPE_MAP[type]) params.set("image_type", TYPE_MAP[type]);
     if (orientation && !isVideo) params.set("orientation", orientation);
 
-    const resp = await fetch(`${baseUrl}?${params}`);
+    const resp = await fetchT(`${baseUrl}?${params}`, {}, 30_000);
     if (!resp.ok) throw new Error(`Pixabay search ${resp.status}: ${await resp.text()}`);
     const data = (await resp.json()) as any;
     const items = data.hits || [];
@@ -78,7 +78,7 @@ export const pixabayAsset: AssetClient = {
 
   async download(result, destPath) {
     if (!result.downloadUrl) throw new Error(`pixabay: result has no downloadUrl`);
-    const r = await fetch(result.downloadUrl);
+    const r = await fetchT(result.downloadUrl);
     if (!r.ok) throw new Error(`pixabay download ${r.status}`);
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     fs.writeFileSync(destPath, Buffer.from(await r.arrayBuffer()));

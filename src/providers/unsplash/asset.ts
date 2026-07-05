@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AssetClient, AssetSearchResult } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 export const unsplashAsset: AssetClient = {
   id: "unsplash",
@@ -27,9 +27,9 @@ export const unsplashAsset: AssetClient = {
       per_page: String(Math.min(30, Math.max(1, limit))),
     });
     if (orientation) params.set("orientation", orientation);
-    const resp = await fetch(`https://api.unsplash.com/search/photos?${params}`, {
+    const resp = await fetchT(`https://api.unsplash.com/search/photos?${params}`, {
       headers: { Authorization: `Client-ID ${cfg.api_key}` },
-    });
+    }, 30_000);
     if (!resp.ok) throw new Error(`Unsplash search ${resp.status}: ${await resp.text()}`);
     const data = (await resp.json()) as any;
     return (data.results || []).map((it: any): AssetSearchResult => ({
@@ -53,13 +53,13 @@ export const unsplashAsset: AssetClient = {
     // Unsplash API asks us to ping /download to register the download.
     try {
       const cfg = loadProviderConfig("unsplash");
-      await fetch(`https://api.unsplash.com/photos/${result.id}/download`, {
+      await fetchT(`https://api.unsplash.com/photos/${result.id}/download`, {
         headers: { Authorization: `Client-ID ${cfg.api_key}` },
-      });
+      }, 15_000);
     } catch {
       // not fatal — just track-download analytics
     }
-    const r = await fetch(result.downloadUrl);
+    const r = await fetchT(result.downloadUrl);
     if (!r.ok) throw new Error(`unsplash download ${r.status}`);
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     fs.writeFileSync(destPath, Buffer.from(await r.arrayBuffer()));

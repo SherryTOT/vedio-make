@@ -11,6 +11,15 @@
  */
 export interface SchemaError { path: string; msg: string }
 
+/** Validation keywords this minimal validator actually ENFORCES. */
+export const SUPPORTED_KEYWORDS = new Set([
+  "type", "enum", "minimum", "maximum", "minLength", "required", "properties", "items", "minItems",
+]);
+/** Structural/meta keys allowed in the schema but not themselves checks. */
+export const IGNORED_KEYWORDS = new Set([
+  "$schema", "$id", "title", "description", "additionalProperties", "default", "examples",
+]);
+
 type JsonSchema = any;
 
 function typeOf(v: unknown): string {

@@ -107,20 +107,25 @@ export function scoreSlideshowRisk(sb: Storyboard, projectRoot: string): RiskRep
     };
   }
 
-  // 4) pacing_monotony — every scene the same length AND methods repeat → no rhythm.
+  // 4) pacing_monotony — a metronomic slideshow has NEITHER duration variation
+  //    NOR method variety. Rhythm from EITHER dimension lowers the risk; risk is
+  //    high only when BOTH are flat. (Earlier this inverted: uniform durations
+  //    scored max risk even when the methods were varied.)
   {
     const durs = scenes.map((s) => s.durationSec).filter((d) => d > 0);
     const mean = durs.reduce((a, b) => a + b, 0) / (durs.length || 1);
     const variance = durs.reduce((a, d) => a + (d - mean) ** 2, 0) / (durs.length || 1);
-    const cv = mean > 0 ? Math.sqrt(variance) / mean : 0; // coefficient of variation
+    const cv = mean > 0 ? Math.sqrt(variance) / mean : 0; // duration coefficient of variation
     const distinctMethods = new Set(scenes.map((s) => s.method ?? "∅")).size;
-    // Low variation in BOTH duration and method = metronomic slideshow.
-    const monotony = cv < 0.12 && distinctMethods <= Math.max(2, Math.ceil(n * 0.25));
+    const distinctFrac = distinctMethods / n;
+    // rhythm ≥ 1 (plenty) when durations vary (cv≈0.25) OR ~half the methods differ.
+    const rhythm = Math.min(1, Math.max(cv / 0.25, distinctFrac / 0.5));
+    const metronomic = cv < 0.12 && distinctMethods <= Math.max(2, Math.ceil(n * 0.25));
     dims.pacing_monotony = {
-      score: monotony ? clamp(3.5 + (0.12 - cv) * 10) : ramp(0.25 - cv, 0.05, 0.25),
-      reason: monotony
-        ? `镜头时长几乎一致(变异系数 ${cv.toFixed(2)})且方法种类少(${distinctMethods}) — 节奏偏机械`
-        : `节奏正常(时长变异 ${cv.toFixed(2)}，方法 ${distinctMethods} 种)`,
+      score: clamp(5 * (1 - rhythm)),
+      reason: metronomic
+        ? `镜头时长几乎一致(变异系数 ${cv.toFixed(2)})且方法种类少(${distinctMethods}/${n}) — 节奏偏机械`
+        : `节奏尚可(时长变异 ${cv.toFixed(2)},方法 ${distinctMethods}/${n} 种)`,
     };
   }
 

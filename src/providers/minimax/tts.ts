@@ -7,7 +7,7 @@
  */
 
 import type { TtsClient } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 import { withRetry } from "../retry.ts";
 
 const TTS_MODEL_CHAIN = [
@@ -82,26 +82,40 @@ export const minimaxTts: TtsClient = {
         },
       };
       if (opts.languageBoost) payload.language_boost = opts.languageBoost;
-      let resp: Response;
+      let data: any;
       try {
-        // Retry transient network errors; non-transient errors fall through to model-chain fallback.
-        resp = await withRetry(() => fetch(`${cfg.base_url}/t2a_v2`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${cfg.api_key}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        }), { label: `minimax-tts-${model}`, maxAttempts: 3 });
+        // Retry HTTP 429/5xx and soft busy-codes WITH backoff (they resolve as a
+        // 200-with-body or a non-network status, so they must be thrown from
+        // INSIDE the closure for withRetry's isRetryable to see them). Tier codes
+        // 2056/2061 mean "wrong model for this key" — those are returned, not
+        // thrown, so the model-chain fallback below advances instead of retrying.
+        data = await withRetry(async () => {
+          const r = await fetchT(`${cfg.base_url}/t2a_v2`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${cfg.api_key}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!r.ok) {
+            // Status is in the message → isRetryable retries 429/5xx, aborts 4xx.
+            throw new Error(`Minimax tts ${r.status}: ${(await r.text()).slice(0, 200)}`);
+          }
+          const d = (await r.json()) as any;
+          const c: number = d?.base_resp?.status_code ?? -1;
+          const m: string = d?.base_resp?.status_msg ?? "";
+          // Soft rate-limit / busy business codes → throw so it backs off & retries.
+          if (c === 1002 || c === 1004 || c === 1027 || c === 1039) {
+            throw new Error(`Minimax tts busy status=${c}: ${m}`);
+          }
+          return d;
+        }, { label: `minimax-tts-${model}`, maxAttempts: 3 });
       } catch (e) {
+        // Retries exhausted or a non-retryable HTTP/network error — try next model.
         lastError = { code: -1, msg: (e as Error).message };
         continue;
       }
-      if (!resp.ok) {
-        lastError = { code: resp.status, msg: await resp.text() };
-        continue;
-      }
-      const data = (await resp.json()) as any;
       const code: number = data?.base_resp?.status_code ?? -1;
       const msg: string = data?.base_resp?.status_msg ?? "";
       if (code === 0) {

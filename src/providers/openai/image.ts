@@ -5,7 +5,7 @@
  */
 
 import type { ImageClient } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 const SIZE_FOR_RATIO: Record<string, string> = {
   "16:9": "1536x1024",
@@ -22,7 +22,7 @@ export const openaiImage: ImageClient = {
     const baseUrl = cfg.base_url || "https://api.openai.com/v1";
     const fullPrompt = style ? `${prompt}. Style: ${style}.` : prompt;
 
-    const resp = await fetch(`${baseUrl}/images/generations`, {
+    const resp = await fetchT(`${baseUrl}/images/generations`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.api_key}`,
@@ -44,8 +44,13 @@ export const openaiImage: ImageClient = {
       items.map(async (item: any) => {
         if (item.b64_json) return Buffer.from(item.b64_json, "base64");
         if (item.url) {
-          const r = await fetch(item.url);
-          return Buffer.from(await r.arrayBuffer());
+          const r = await fetchT(item.url);
+          if (!r.ok) throw new Error(`OpenAI image url fetch ${r.status}`);
+          const buf = Buffer.from(await r.arrayBuffer());
+          // Reject an error page saved as a .png: PNG (89 50) / JPEG (FF D8) magic.
+          const okMagic = (buf[0] === 0x89 && buf[1] === 0x50) || (buf[0] === 0xff && buf[1] === 0xd8);
+          if (!okMagic) throw new Error(`OpenAI image url returned non-image bytes (${buf.length}B)`);
+          return buf;
         }
         throw new Error("OpenAI image: response has neither b64_json nor url");
       })

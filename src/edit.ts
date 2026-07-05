@@ -334,8 +334,12 @@ async function confirmPrompt(question: string): Promise<boolean> {
   if (!process.stdin.isTTY) return true; // non-interactive — auto-yes
   process.stdout.write(question);
   return new Promise((resolve) => {
+    process.stdin.resume();
     process.stdin.setEncoding("utf8");
     process.stdin.once("data", (d) => {
+      // Pause the stream so its open handle stops keeping the event loop alive —
+      // otherwise the CLI hangs forever after the user answers.
+      process.stdin.pause();
       const s = String(d).trim().toLowerCase();
       resolve(s === "" || s === "y" || s === "yes" || s === "是");
     });

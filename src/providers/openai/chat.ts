@@ -5,14 +5,14 @@
  */
 
 import type { ChatClient } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 export const openaiChat: ChatClient = {
   id: "openai",
   async chat({ messages, maxTokens = 4096, temperature = 0.3, model }) {
     const cfg = loadProviderConfig("openai");
     const baseUrl = cfg.base_url || "https://api.openai.com/v1";
-    const resp = await fetch(`${baseUrl}/chat/completions`, {
+    const resp = await fetchT(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.api_key}`,

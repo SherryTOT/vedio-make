@@ -7,14 +7,14 @@
  */
 
 import type { SearchClient } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 export const tavilySearch: SearchClient = {
   id: "tavily",
   async search({ query, limit = 5, recency = "any" }) {
     const cfg = loadProviderConfig("tavily");
     const baseUrl = cfg.base_url || "https://api.tavily.com";
-    const resp = await fetch(`${baseUrl}/search`, {
+    const resp = await fetchT(`${baseUrl}/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

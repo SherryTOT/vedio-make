@@ -49,12 +49,23 @@ export function parseSrt(src: string): Cue[] {
     const textLines = lines.slice(timeLineIdx + 1);
     if (textLines.length === 0) continue;
 
+    // Strip inline markup: HTML/font tags (<i>, <font …>, <b>) and ASS/SSA
+    // override blocks ({\an8}, {\pos(…)}). Left in, they render as visible
+    // literal text on screen AND get spoken by TTS. Drop the cue if nothing
+    // but markup remained.
+    const text = textLines
+      .join("\n")
+      .replace(/<\/?[a-zA-Z][^>]*>/g, "")
+      .replace(/\{\\[^}]*\}/g, "")
+      .trim();
+    if (!text) continue;
+
     const index = Number.parseInt(idxLine, 10);
     cues.push({
       index: Number.isFinite(index) ? index : cues.length + 1,
       startSec,
       endSec,
-      text: textLines.join("\n"),
+      text,
     });
   }
 

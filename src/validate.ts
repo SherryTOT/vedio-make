@@ -36,6 +36,9 @@ export interface ValidateFinding {
   msg: string;
 }
 
+/** Methods that render fabricated placeholder data when scene.data is missing. */
+const DATA_METHODS = new Set(["rm-d3-bar-chart", "rm-d3-line-trend"]);
+
 /** Does an asset path resolve to a real file under any of the usual roots? */
 function assetExists(projectRoot: string, rel: string, underAssets: boolean): boolean {
   const candidates = underAssets
@@ -107,6 +110,13 @@ export function validateStoryboard(
     if (s.foreground && !assetExists(projectRoot, s.foreground, true)) {
       add("error", "missing-foreground", `镜头 #${at} 的前景抠像 PNG 找不到:assets/${s.foreground}(渲染会崩)`, at);
     }
+    // Data-driven chart methods silently draw a labelled placeholder sample when
+    // scene.data is absent — warn so it isn't mistaken for real data in the film.
+    if (s.method && DATA_METHODS.has(s.method)) {
+      const d: any = (s as any).data;
+      const hasData = d && ((Array.isArray(d.items) && d.items.length) || (Array.isArray(d.years) && d.years.length));
+      if (!hasData) add("warn", "data-missing", `镜头 #${at} 用数据图方法 '${s.method}' 但没有 data — 会画“示例”占位数据(跑 检索数据 / 填 scene.data)`, at);
+    }
   }
 
   // ─ Contiguity (full-board only): gaps aren't filled by the stitcher ─
@@ -116,6 +126,38 @@ export function validateStoryboard(
       const gap = ordered[i].startSec - ordered[i - 1].endSec;
       if (gap > 0.06) add("warn", "timeline-gap", `镜头 #${ordered[i - 1].index}→#${ordered[i].index} 之间有 ${gap.toFixed(2)}s 空隙(拼接不会补,字幕会漂)`, ordered[i].index);
       if (gap < -0.06) add("warn", "timeline-overlap", `镜头 #${ordered[i - 1].index}→#${ordered[i].index} 时间重叠 ${(-gap).toFixed(2)}s`, ordered[i].index);
+    }
+  }
+
+  // ─ Voice track (full-board only) ─ If `pipeline tts` produced a narration
+  //   manifest, the storyboard PROMISES narration. Catch the two silent-failure
+  //   modes BEFORE the render instead of after: (1) a missing mp3 crashes the
+  //   audio mix only at the very end of a full render; (2) a scene whose text was
+  //   edited since tts ran is silently dropped from the mix (buildVoiceTrack
+  //   filters it with only a console.warn), leaving a narration hole that the
+  //   post-render review can't see. Same norm() as render.ts buildVoiceTrack.
+  if (onlyIndex == null) {
+    const trackPath = path.resolve(projectRoot, "output", "voice-track.json");
+    if (fs.existsSync(trackPath)) {
+      let track: { scenes?: Array<{ index: number; text?: string; file: string }> } | null = null;
+      try {
+        track = JSON.parse(fs.readFileSync(trackPath, "utf8"));
+      } catch {
+        add("error", "voice-track-corrupt", "配音清单 output/voice-track.json 损坏(JSON 读不出)— 重跑 `pipeline tts`");
+      }
+      if (track?.scenes?.length) {
+        const norm = (t?: string) => (t ?? "").replace(/^\d+$/m, "").trim();
+        const textByIndex = new Map(sb.scenes.map((s) => [s.index, norm(s.text)]));
+        for (const e of track.scenes) {
+          if (!fs.existsSync(path.resolve(projectRoot, e.file))) {
+            add("error", "missing-voice", `镜头 #${e.index} 的配音文件缺失:${e.file}(整片渲染到最后混音才会崩)`, e.index);
+          } else if (!textByIndex.has(e.index)) {
+            add("warn", "orphan-voice", `配音清单里的镜头 #${e.index} 已不在分镜中 — 混音时会被丢弃`, e.index);
+          } else if (textByIndex.get(e.index) !== norm(e.text)) {
+            add("error", "stale-voice", `镜头 #${e.index} 文案在配音后改过 — 这句旁白会被静默丢弃(成片缺这句配音)。重跑 \`pipeline tts\`,或 force 强渲`, e.index);
+          }
+        }
+      }
     }
   }
 

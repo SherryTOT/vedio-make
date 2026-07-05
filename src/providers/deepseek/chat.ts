@@ -8,13 +8,13 @@
  */
 
 import type { ChatClient } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 export const deepseekChat: ChatClient = {
   id: "deepseek",
   async chat({ messages, maxTokens = 4096, temperature = 0.3, model }) {
     const cfg = loadProviderConfig("deepseek");
-    const resp = await fetch(`${cfg.base_url}/chat/completions`, {
+    const resp = await fetchT(`${cfg.base_url}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.api_key}`,

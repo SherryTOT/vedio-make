@@ -306,6 +306,83 @@
       "assetNeeds": [],
       "fallback": "hf-kinetic-text",
       "implemented": true
+    },
+    {
+      "id": "hf-poster-hero",
+      "label": "Cinematic Poster Hero (image + hero text)",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "image",
+        "poster",
+        "hero",
+        "cinematic",
+        "title"
+      ],
+      "whenToUse": "Hero line narrated over a full-bleed generated/stock image — cinematic essay poster with kicker + subtitle chrome. Needs a background image; without one it falls back to kinetic-text.",
+      "inputs": [
+        "text",
+        "notes"
+      ],
+      "assetNeeds": [
+        "image"
+      ],
+      "fallback": "hf-kinetic-text",
+      "implemented": true
+    },
+    {
+      "id": "hf-mountain-reveal",
+      "label": "Mountain Occlusion Title Reveal",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "image",
+        "cinematic",
+        "title",
+        "reveal",
+        "landscape"
+      ],
+      "whenToUse": "Special cinematic reveal: a title rises and is occluded by a foreground silhouette (mountains/skyline), emerging through the notches. Requires BOTH a background image AND its foreground matte (scene.foreground); falls back to poster-hero. Niche — pick only when the scene explicitly wants this landscape-reveal beat.",
+      "inputs": [
+        "text",
+        "notes"
+      ],
+      "assetNeeds": [
+        "image",
+        "matte"
+      ],
+      "fallback": "hf-poster-hero",
+      "implemented": true
+    },
+    {
+      "id": "hf-line-reveal",
+      "label": "Line Chart Editorial Card (HyperFrames)",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "data",
+        "trend",
+        "line",
+        "timeseries",
+        "multi-series",
+        "chart"
+      ],
+      "whenToUse": "Multi-series comparison line chart on a light editorial card (several named series over a shared x-axis, e.g. GDP by country across years). HTML/GSAP — no npm install, lighter than rm-d3-line-trend. Prefer rm-d3-line-trend for a single precise timeseries; prefer this for multi-series editorial comparisons.",
+      "inputs": [
+        "text",
+        "data:series"
+      ],
+      "assetNeeds": [
+        "data:json"
+      ],
+      "fallback": "hf-css-fade",
+      "implemented": true
     }
   ],
   "wipMethods": [

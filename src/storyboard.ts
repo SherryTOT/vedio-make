@@ -245,18 +245,20 @@ export function buildStoryboardHtml(
 <title>${esc(sb.project.title)} · Storyboard</title>
 <style>
   :root {
-    --bg: #0a0612;
-    --bg2: #110a1f;
-    --fg: #f4ead0;
-    --muted: rgba(244,234,208,0.45);
-    --gold: #d4a64a;
-    --gold-bright: #f4d479;
-    --border: rgba(212,166,74,0.25);
+    /* 印刷工坊 tokens (was a dark-purple/gold gradient-and-glow theme that broke
+       the house aesthetic). Variable NAMES kept so the rest of the sheet cascades. */
+    --bg: #f6f5f1;
+    --bg2: #f2f0ea;
+    --fg: #1b1612;
+    --muted: rgba(27,22,18,0.5);
+    --gold: #c36c36;
+    --gold-bright: #9e5326;
+    --border: rgba(27,22,18,0.14);
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: 48px 40px 80px;
-    background: linear-gradient(180deg, var(--bg) 0%, var(--bg2) 100%);
+    background: var(--bg);
     color: var(--fg);
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Source Han Sans SC", "Microsoft Yahei", sans-serif;
     line-height: 1.55;
@@ -265,7 +267,7 @@ export function buildStoryboardHtml(
   h1 { font-size: 36px; letter-spacing: 0.04em; margin: 0 0 8px; }
   .meta { color: var(--muted); font-size: 14px; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 36px; }
   .pool {
-    background: rgba(255,255,255,0.03);
+    background: #ffffff;
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 16px 20px;
@@ -288,7 +290,7 @@ export function buildStoryboardHtml(
     display: grid;
     grid-template-columns: 1fr 360px;
     gap: 24px;
-    background: rgba(255,255,255,0.025);
+    background: #ffffff;
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 24px 28px;
@@ -303,9 +305,9 @@ export function buildStoryboardHtml(
     overflow: hidden;
     border: 1px solid var(--border);
     background: #000;
-    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    transition: transform 0.18s ease, border-color 0.18s ease;
   }
-  article.scene .scene-preview:hover { transform: translateY(-2px); border-color: var(--gold); box-shadow: 0 16px 36px rgba(0,0,0,0.55), 0 0 0 1px rgba(212,166,74,0.35); }
+  article.scene .scene-preview:hover { transform: translateY(-2px); border-color: var(--gold); }
   article.scene .scene-preview video { display: block; width: 100%; height: auto; aspect-ratio: 16/9; background: #000; }
   article.scene .scene-video-placeholder { display: flex; align-items: center; justify-content: center; aspect-ratio: 16/9; padding: 14px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.5; }
   article.scene .scene-video-placeholder code { color: var(--gold-bright); }
@@ -313,18 +315,18 @@ export function buildStoryboardHtml(
     article.scene { grid-template-columns: 1fr; }
     article.scene .scene-preview { position: relative; top: 0; max-width: 480px; }
   }
-  .player-bar { position: sticky; top: 0; z-index: 10; padding: 12px 20px; margin: -48px -40px 24px; background: rgba(10,6,18,0.92); border-bottom: 1px solid var(--border); backdrop-filter: blur(8px); display: ${hasFinal ? "block" : "none"}; }
+  .player-bar { position: sticky; top: 0; z-index: 10; padding: 12px 20px; margin: -48px -40px 24px; background: rgba(246,245,241,0.96); border-bottom: 1px solid var(--border); display: ${hasFinal ? "block" : "none"}; }
   .player-bar video { width: 100%; max-height: 360px; background: #000; border-radius: 6px; }
   .player-bar .hint { font-size: 12px; color: var(--muted); letter-spacing: 0.12em; text-transform: uppercase; margin-top: 6px; }
 
   .approval-bar { padding: 14px 20px; margin: 0 0 24px; border-radius: 10px; border: 1px solid var(--border); font-size: 14px; }
-  .approval-bar.approved     { background: rgba(122, 235, 184, 0.08); border-color: rgba(122, 235, 184, 0.4); color: #b6f0d3; }
-  .approval-bar.needs-approve { background: rgba(255, 196, 122, 0.07); border-color: rgba(255, 196, 122, 0.4); color: #ffd49c; }
-  .approval-bar.no-analyze   { background: rgba(244, 234, 208, 0.04); color: var(--muted); }
+  .approval-bar.approved     { background: rgba(63, 143, 94, 0.10); border-color: rgba(63, 143, 94, 0.4); color: #2e6d47; }
+  .approval-bar.needs-approve { background: rgba(195, 108, 54, 0.10); border-color: rgba(195, 108, 54, 0.4); color: #9e5326; }
+  .approval-bar.no-analyze   { background: rgba(27, 22, 18, 0.05); color: var(--muted); }
   .approval-bar .state-icon  { font-weight: 700; margin-right: 8px; }
-  .approval-bar code { background: rgba(0,0,0,0.4); padding: 1px 6px; border-radius: 3px; font-size: 12px; color: var(--gold-bright); }
+  .approval-bar code { background: rgba(27,22,18,0.06); padding: 1px 6px; border-radius: 3px; font-size: 12px; color: var(--gold-bright); }
 
-  .edit-toggle { background: transparent; border: 1px solid rgba(244,234,208,0.2); color: var(--muted); border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 11px; letter-spacing: 0.1em; margin-left: 12px; }
+  .edit-toggle { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 11px; letter-spacing: 0.1em; margin-left: 12px; }
   .edit-toggle:hover { color: var(--gold); border-color: var(--gold); }
   article.scene.editing .edit-toggle { color: var(--gold); border-color: var(--gold); }
 
@@ -332,7 +334,7 @@ export function buildStoryboardHtml(
   article.scene.editing .grid.view-mode { display: none; }
   article.scene.editing .grid.edit-mode { display: grid; }
   .grid.edit-mode select, .grid.edit-mode textarea, .grid.edit-mode input[type=checkbox] {
-    background: rgba(0,0,0,0.4); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-family: inherit; font-size: 13px;
+    background: #ffffff; color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-family: inherit; font-size: 13px;
   }
   .grid.edit-mode select { min-width: 180px; margin-right: 8px; }
   .grid.edit-mode textarea { width: 100%; resize: vertical; font-size: 13px; }
@@ -342,7 +344,7 @@ export function buildStoryboardHtml(
 
   .last-change-badge { background: rgba(255, 196, 122, 0.18); color: #ffd49c; padding: 1px 8px; border-radius: 10px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; margin-left: 8px; vertical-align: middle; }
 
-  .dl-banner { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--gold); color: #1a1106; padding: 14px 22px; border-radius: 10px; font-size: 14px; font-weight: 600; box-shadow: 0 24px 60px rgba(0,0,0,0.6); z-index: 100; display: none; align-items: center; gap: 16px; }
+  .dl-banner { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--gold); color: #fff; padding: 14px 22px; border-radius: 10px; font-size: 14px; font-weight: 600; border: 1px solid var(--gold-bright); z-index: 100; display: none; align-items: center; gap: 16px; }
   .dl-banner.show { display: flex; }
   .dl-banner a { color: #1a1106; background: rgba(255,255,255,0.45); padding: 6px 12px; border-radius: 4px; text-decoration: none; font-weight: 600; }
   article.scene header {
@@ -364,11 +366,11 @@ export function buildStoryboardHtml(
   .row .val { flex: 1; }
   .tier { display: inline-block; min-width: 18px; text-align: center; padding: 1px 6px; border-radius: 3px; color: #000; font-size: 11px; font-weight: 600; margin: 0 6px; }
   .engine { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); margin-left: 8px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px; }
-  .reasoning { font-size: 13px; color: rgba(244,234,208,0.7); padding: 10px 12px; background: rgba(0,0,0,0.2); border-radius: 6px; margin-top: 8px; border-left: 2px solid var(--gold); }
+  .reasoning { font-size: 13px; color: var(--muted); padding: 10px 12px; background: rgba(27,22,18,0.05); border-radius: 6px; margin-top: 8px; border-left: 2px solid var(--gold); }
   .notes { font-size: 13px; color: var(--gold-bright); margin: 12px 0 0 18px; padding: 0; }
   .notes li { margin-bottom: 4px; }
   .row .val.fx { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
-  .fx-label { color: rgba(244,234,208,0.32); font-size: 10px; text-transform: uppercase; letter-spacing: 0.16em; margin-right: 2px; }
+  .fx-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.16em; margin-right: 2px; }
   .fx-chip {
     display: inline-block;
     padding: 3px 9px;
@@ -386,7 +388,7 @@ export function buildStoryboardHtml(
   .fx-chip.voice  { border-color: rgba(122, 235, 184, 0.5); color: #9bf2c8; }
   .fx-chip.burn   { border-color: rgba(255, 159, 122, 0.55); color: #ffb89c; }
   .fx-chip.fg     { border-color: rgba(244, 212, 121, 0.6); color: var(--gold-bright); }
-  .fx-chip.muted  { border-color: rgba(244,234,208,0.18); color: rgba(244,234,208,0.4); background: transparent; }
+  .fx-chip.muted  { border-color: var(--border); color: var(--muted); background: transparent; }
 </style>
 </head>
 <body>

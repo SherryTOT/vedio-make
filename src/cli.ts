@@ -55,6 +55,26 @@ function findProjectRoot(start: string): string {
   return path.dirname(fileURLToPath(import.meta.url)).replace(/\/src$/, "");
 }
 
+/**
+ * Read a numeric flag with a default, failing LOUDLY on a non-number instead of
+ * letting NaN flow into storyboard.json (where JSON.stringify writes it as null
+ * and downstream silently breaks).
+ */
+function intFlag(
+  flags: Record<string, string | boolean>,
+  name: string,
+  def: number,
+  opts: { min?: number; max?: number } = {},
+): number {
+  const raw = flags[name];
+  if (raw == null || raw === true) return def;
+  const v = parseInt(String(raw), 10);
+  if (!Number.isFinite(v)) { console.error(`--${name} 需要一个整数,收到 '${raw}'`); process.exit(1); }
+  if (opts.min != null && v < opts.min) { console.error(`--${name} 不能小于 ${opts.min}(收到 ${v})`); process.exit(1); }
+  if (opts.max != null && v > opts.max) { console.error(`--${name} 不能大于 ${opts.max}(收到 ${v})`); process.exit(1); }
+  return v;
+}
+
 function parseFlags(argv: string[]): Record<string, string | boolean> {
   const flags: Record<string, string | boolean> = {};
   for (let i = 0; i < argv.length; i++) {
@@ -130,11 +150,11 @@ async function main() {
     const title = (flags.title as string) || path.basename(srtPath, path.extname(srtPath));
     const designDoc = (flags.design as string) || "design.md";
     const assetsDir = path.resolve(root, "assets");
-    const width = parseInt((flags.width as string) || "1920", 10);
-    const height = parseInt((flags.height as string) || "1080", 10);
-    const fps = parseInt((flags.fps as string) || "30", 10);
+    const width = intFlag(flags, "width", 1920, { min: 16, max: 8192 });
+    const height = intFlag(flags, "height", 1080, { min: 16, max: 8192 });
+    const fps = intFlag(flags, "fps", 30, { min: 1, max: 120 });
 
-    const sb = runPlan({ srtPath, outPath, designDoc, assetsDir, title, width, height, fps });
+    const sb = runPlan({ srtPath, outPath, designDoc, assetsDir, title, width, height, fps, force: Boolean(flags.force) });
     console.log(`✓ Parsed ${sb.scenes.length} cues → ${path.relative(process.cwd(), outPath)}`);
     console.log(`  Asset pool: ${sb.assetPool.length} file(s)`);
     console.log(`  Next step:  Claude fills method/fallback/reasoning for each scene, then run:`);
@@ -207,7 +227,12 @@ async function main() {
     const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
     sb.stages = { ...(sb.stages ?? {}), approved: true };
     fs.writeFileSync(inPath, JSON.stringify(sb, null, 2));
+    // Lock the delivery promise so the post-render review can catch any silent
+    // downgrade (dropped narration, removed scene, design swap) after this point.
+    const { lockPromise } = await import("./promise.ts");
+    const promise = lockPromise(sb, path.dirname(inPath));
     console.log(`✓ Storyboard approved. 'pipeline render' will now run without --force.`);
+    console.log(`  已锁定成片承诺:${promise.sceneCount} 镜头 · ${promise.durationSec}s · 配音=${promise.audio.voice ? "有" : "无"} · 配乐=${promise.audio.bgm ? "有" : "无"}`);
     return;
   }
 
@@ -235,7 +260,7 @@ async function main() {
       | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | undefined;
     const onlyIndices = flags.scene ? [parseInt(flags.scene as string, 10)] : undefined;
     if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
-    const candidates = flags.n ? parseInt(flags.n as string, 10) : 1;
+    const candidates = intFlag(flags, "n", 1, { min: 1, max: 9 });
     await runImages({
       storyboardPath: inPath,
       assetsDir,
@@ -350,7 +375,7 @@ async function main() {
 
   if (cmd === "serve") {
     const flags = parseFlags(rest);
-    const port = parseInt((flags.port as string) || process.env.PIPELINE_PORT || "8766", 10);
+    const port = intFlag(flags, "port", parseInt(process.env.PIPELINE_PORT || "8766", 10) || 8766, { min: 1, max: 65535 });
     const host = (flags.host as string) || "127.0.0.1";
     const projectsDir = path.resolve(root, (flags.projects as string) || "projects");
     let token = (flags.token as string) || process.env.PIPELINE_TOKEN || "";
@@ -449,10 +474,16 @@ async function main() {
     const flags = parseFlags(rest);
     const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
     const outputDir = path.resolve(root, "output");
-    const only = flags.only ? parseInt(flags.only as string, 10) : null;
+    const only = flags.only != null ? parseInt(String(flags.only), 10) : null;
+    if (only !== null && !Number.isInteger(only)) {
+      console.error(`render: --only 需要一个整数镜号,收到 '${flags.only}'`); process.exit(1);
+    }
     const force = Boolean(flags.force);
     const stitchOnly = Boolean(flags.stitch);
-    const workers = flags.workers ? parseInt(flags.workers as string, 10) : 1;
+    const workers = flags.workers != null ? parseInt(String(flags.workers), 10) : 1;
+    if (!Number.isInteger(workers) || workers < 1) {
+      console.error(`render: --workers 需要 ≥1 的整数,收到 '${flags.workers}'`); process.exit(1);
+    }
     if (!fs.existsSync(inPath)) {
       console.error(`Storyboard JSON not found: ${inPath}`);
       process.exit(1);

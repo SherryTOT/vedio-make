@@ -18,6 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { getChat, getImage } from "./providers/registry.ts";
+import { writeFileAtomic } from "./fsutil.ts";
 import type { Scene, Storyboard } from "./types.ts";
 
 interface ImagesOpts {
@@ -171,7 +172,10 @@ export async function runImages(opts: ImagesOpts): Promise<void> {
     if (!targetIndices.has(sc.index)) continue;
 
     const promptSeed = sc.text;
-    const hash = sha1(`${promptSeed}|${imageClient.id}|${opts.aspectRatio ?? "16:9"}|${designSummary.slice(0, 200)}`);
+    // imageStyle selects among 8 very different STYLE_RECIPES that dominate the
+    // prompt, so it MUST be in the cache key — otherwise switching a scene's style
+    // (a user-editable knob) would silently keep the old image.
+    const hash = sha1(`${promptSeed}|${imageClient.id}|${opts.aspectRatio ?? "16:9"}|${sc.imageStyle ?? "editorial"}|${designSummary.slice(0, 200)}`);
     const filename = `scene-${String(sc.index).padStart(3, "0")}.${hash}.png`;
     const absPath = path.join(generatedDir, filename);
     const relFromRoot = path.relative(opts.projectRoot, absPath);
@@ -179,7 +183,7 @@ export async function runImages(opts: ImagesOpts): Promise<void> {
 
     if (!opts.force && fs.existsSync(absPath)) {
       console.log(`[scene ${sc.index}] image cache hit — '${promptSeed.slice(0, 28)}…'`);
-      ensureAssetRef(sc, relFromAssets);
+      ensureAssetRef(sc, relFromAssets, false);
       continue;
     }
 
@@ -213,13 +217,15 @@ export async function runImages(opts: ImagesOpts): Promise<void> {
       });
       if (!buffers.length) throw new Error("no image bytes");
       // Primary: first candidate. Alternates: scene-NNN.alt-1.png, .alt-2.png, etc.
-      fs.writeFileSync(absPath, buffers[0]);
-      ensureAssetRef(sc, relFromAssets);
+      // Write atomically (temp + rename): a crash mid-write must not leave a
+      // truncated PNG at absPath, which existsSync would then cache-hit forever.
+      writeFileAtomic(absPath, buffers[0]);
+      ensureAssetRef(sc, relFromAssets, true);
       console.log(`[scene ${sc.index}] → ${relFromRoot}  (${(buffers[0].length / 1024).toFixed(0)} KB${n > 1 ? `, primary of ${n}` : ""})`);
       for (let i = 1; i < buffers.length; i++) {
         const altName = `scene-${String(sc.index).padStart(3, "0")}.${hash}.alt-${i}.png`;
         const altAbs = path.join(generatedDir, altName);
-        fs.writeFileSync(altAbs, buffers[i]);
+        writeFileAtomic(altAbs, buffers[i]);
       }
     } catch (e) {
       console.error(`[scene ${sc.index}] image FAILED: ${(e as Error).message}`);
@@ -231,9 +237,31 @@ export async function runImages(opts: ImagesOpts): Promise<void> {
   console.log(`✓ storyboard updated with scene.assets entries`);
 }
 
-function ensureAssetRef(scene: Scene, relPath: string): void {
+/**
+ * Attach the generated background ref WITHOUT silently reverting the user's
+ * curation. The scene's assets[0] is what the renderer picks, so a hand-chosen
+ * alternate candidate (`generated/…alt-N.png`), a stock photo attached via
+ * `pipeline fetch`, or an already-present generated ref must survive a re-run.
+ *
+ * `regenerated` = this run actually produced a new file (vs a cache hit). On a
+ * cache hit we never touch a curated scene; on a real regen we refresh the
+ * generated ref but still never demote a user's non-generated image at the top.
+ */
+function ensureAssetRef(scene: Scene, relPath: string, regenerated: boolean): void {
   scene.assets = scene.assets ?? [];
-  // Remove any previous generated background ref for this scene
+  const isImage = (a: string) => /\.(png|jpe?g|webp)$/i.test(a);
+  const hasGenerated = scene.assets.some((a) => a.startsWith("generated/"));
+  const userImageAtTop = scene.assets.length > 0 && isImage(scene.assets[0]) && !scene.assets[0].startsWith("generated/");
+
+  if (!regenerated) {
+    // Cache hit — leave any existing curation (generated ref, alt, or stock) intact.
+    if (hasGenerated || userImageAtTop) return;
+    scene.assets.unshift(relPath);
+    return;
+  }
+  // Freshly (re)generated. Replace the generated ref, but keep a user's
+  // non-generated image (e.g. stock photo) as the primary if they set one.
   scene.assets = scene.assets.filter((a) => !a.startsWith("generated/"));
-  scene.assets.unshift(relPath);
+  if (userImageAtTop) scene.assets.push(relPath);
+  else scene.assets.unshift(relPath);
 }

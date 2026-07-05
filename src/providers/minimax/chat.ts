@@ -4,7 +4,7 @@
  */
 
 import type { ChatClient, ChatMessage } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 import { withRetry } from "../retry.ts";
 
 export const minimaxChat: ChatClient = {
@@ -16,7 +16,7 @@ export const minimaxChat: ChatClient = {
 
 async function doChat({ messages, maxTokens, temperature, model }: { messages: ChatMessage[]; maxTokens: number; temperature: number; model?: string }): Promise<string> {
     const cfg = loadProviderConfig("minimax");
-    const resp = await fetch(`${cfg.base_url}/chat/completions`, {
+    const resp = await fetchT(`${cfg.base_url}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.api_key}`,

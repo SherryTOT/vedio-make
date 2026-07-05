@@ -56,6 +56,22 @@ function langOf(voiceId: string): string {
   return m ? m[1] : "zh-CN";
 }
 
+/**
+ * Map an arbitrary voiceId to a REAL Edge voice. Critical for the free fallback
+ * path: when a MiniMax run downgrades to Edge, it carries the MiniMax voiceId
+ * (e.g. the default "presenter_male") — which is NOT a valid Edge SSML voice, so
+ * Microsoft returns no audio and the whole free path fails. We keep genuine Edge
+ * ids as-is and map anything else to a gender-matched Edge default.
+ * (Check female BEFORE male — "female" contains the substring "male".)
+ */
+export function resolveEdgeVoice(voiceId?: string): string {
+  const v = (voiceId || "").trim();
+  if (/-[A-Za-z]+Neural$/.test(v)) return v; // already an Edge voice id
+  if (/female|女/i.test(v)) return "zh-CN-XiaoxiaoNeural";
+  if (/male|男/i.test(v)) return "zh-CN-YunjianNeural";
+  return "zh-CN-XiaoxiaoNeural"; // unknown / empty → warm female narration
+}
+
 /** Parse a binary Edge frame: [2-byte BE header length][header text][audio bytes]. */
 function parseBinaryFrame(buf: Buffer): Buffer | null {
   if (buf.length < 2) return null;
@@ -73,7 +89,7 @@ export const edgeTts: TtsClient = {
   },
 
   async tts(opts) {
-    const voice = opts.voiceId || "zh-CN-XiaoxiaoNeural";
+    const voice = resolveEdgeVoice(opts.voiceId);
     const ratePct = Math.round(((opts.speed ?? 1.0) - 1) * 100);
     const rate = `${ratePct >= 0 ? "+" : ""}${ratePct}%`;
     const text = opts.text;
@@ -138,9 +154,14 @@ export const edgeTts: TtsClient = {
       ws.onerror = () =>
         done(new Error("Edge 配音组件连接失败(Microsoft 拒绝握手,可能 Sec-MS-GEC 令牌已轮换)"));
       ws.onclose = () => {
+        // A clean synthesis always fires Path:turn.end first (which settles with
+        // the full audio). Reaching onclose unsettled means the socket dropped
+        // mid-stream — any chunks so far are TRUNCATED, so fail rather than cache
+        // half a narration line as if it were complete.
         if (!settled) {
-          if (chunks.length) done(null, Buffer.concat(chunks));
-          else done(new Error("Edge TTS socket closed before audio"));
+          done(new Error(chunks.length
+            ? "Edge TTS socket closed mid-stream (audio truncated)"
+            : "Edge TTS socket closed before audio"));
         }
       };
     });

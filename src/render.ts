@@ -59,9 +59,55 @@ const FFMPEG_TIMEOUT_MS = Number(process.env.PIPELINE_FFMPEG_TIMEOUT_MS) || 10 *
 // Brief settle between consecutive hyperframes renders so Chromium fully exits
 // before the next launch (cheap insurance against any browser-cleanup overlap).
 const SETTLE_MS = Number(process.env.PIPELINE_SETTLE_MS ?? 400);
+// In the xfade stitch path a "cut" is emulated by a tiny 0.04s crossfade (xfade
+// needs a non-zero duration). The perceived-timeline math MUST use the same value
+// or voice/subtitle timing drifts by 0.04s per cut across the whole video.
+const CUT_XFADE_SEC = 0.04;
 
 function sha1(s: string): string {
   return crypto.createHash("sha1").update(s).digest("hex").slice(0, 12);
+}
+
+// Bump when anything OUTSIDE the scene source changes the rendered pixels:
+// harden.ts vendoring rules or the hyperframes pin. Folded into each scene's
+// srcHash so a cached scene re-renders when the render *environment* changes,
+// not just when the storyboard text/design does.
+const RENDER_ENV_VERSION = "hf0.6.7+harden2";
+
+/** Reclaim disk after a render: remove scene working-dirs ("scene-<NNN>.<hash>")
+ *  and content-addressed mp4s ("scene.<hash>.mp4") whose srcHash is no longer live.
+ *  Bounds output/scenes to the CURRENT set of scenes (stale re-render artifacts —
+ *  especially Remotion's per-hash node_modules — no longer accumulate forever).
+ *  Never throws: cleanup must not fail an otherwise-successful render. */
+function pruneStaleSceneArtifacts(scenesDir: string, liveHashes: Set<string>): void {
+  try {
+    for (const name of fs.readdirSync(scenesDir)) {
+      const mDir = name.match(/^scene-\d+\.([0-9a-f]{6,})$/);
+      const mMp4 = name.match(/^scene\.([0-9a-f]{6,})\.mp4$/);
+      const hash = mDir?.[1] ?? mMp4?.[1] ?? null;
+      if (hash && !liveHashes.has(hash)) {
+        fs.rmSync(path.join(scenesDir, name), { recursive: true, force: true });
+      }
+    }
+  } catch { /* best-effort cleanup */ }
+}
+
+/** Fingerprint an output's on-disk asset inputs (rel path + size + mtime), so a
+ *  regenerated image or re-matted foreground — same filename, new bytes — busts
+ *  the cache even though the composition HTML/TSX is byte-identical. */
+function sideFilesFingerprint(sideFiles: Record<string, string> | undefined): string {
+  if (!sideFiles) return "";
+  return Object.keys(sideFiles)
+    .sort()
+    .map((rel) => {
+      try {
+        const st = fs.statSync(sideFiles[rel]);
+        return `${rel}:${st.size}:${Math.round(st.mtimeMs)}`;
+      } catch {
+        return `${rel}:missing`;
+      }
+    })
+    .join("|");
 }
 
 /** Thin wrapper over the async process runner with the active render's log sink. */
@@ -229,6 +275,7 @@ Config.setPixelFormat("yuv420p");
 
   // Install + render
   await sh("npm", ["install", "--silent", "--no-audit", "--no-fund"], sceneDir, RM_TIMEOUT_MS, `npm install ${path.basename(sceneDir)}`);
+  const rawOut = path.join(sceneDir, "raw.mp4");
   await sh(
     "npx",
     [
@@ -237,13 +284,31 @@ Config.setPixelFormat("yuv420p");
       "render",
       "src/index.ts",
       compId,
-      path.resolve(outMp4),
+      path.resolve(rawOut),
       `--props=${JSON.stringify(props)}`,
       "--concurrency=4",
     ],
     sceneDir,
     RM_TIMEOUT_MS,
     `remotion 渲染 ${path.basename(sceneDir)}`
+  );
+  // Remotion emits full-range (yuvj420p / color_range=pc), HyperFrames emits
+  // limited-range (yuv420p / tv). A concat -c copy stitch keeps only ONE set of
+  // color tags, so mixed-engine finals render the Remotion segments with lifted
+  // blacks / washed levels. Normalize every Remotion clip to the SAME limited-
+  // range yuv420p/bt709 HyperFrames produces, so the fast concat path is safe.
+  await sh(
+    "ffmpeg",
+    [
+      "-y", "-loglevel", "error", "-i", path.resolve(rawOut),
+      "-vf", "scale=in_range=full:out_range=tv,format=yuv420p",
+      "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-an",
+      path.resolve(outMp4),
+    ],
+    sceneDir,
+    FFMPEG_TIMEOUT_MS,
+    `色域归一 ${path.basename(sceneDir)}`,
   );
 }
 
@@ -308,7 +373,7 @@ async function stitchScenesWithTransitions(clips: SceneClip[], outFinal: string)
     const c = clips[i];
     const isCut = c.transition === "cut";
     const xfade = xfadeTypes[c.transition] ?? "fade";
-    const tDur = isCut ? 0.04 : Math.min(c.transitionDur, c.durationSec * 0.4, clips[i - 1].durationSec * 0.4);
+    const tDur = isCut ? CUT_XFADE_SEC : Math.min(c.transitionDur, c.durationSec * 0.4, clips[i - 1].durationSec * 0.4);
     const offset = (runningDur - tDur).toFixed(3);
     const outLabel = i === clips.length - 1 ? "[vout]" : `[v${i}]`;
     filterSteps.push(
@@ -439,7 +504,10 @@ async function burnSubtitles(videoIn: string, srtPath: string, outBurned: string
       const tmpOut = path.join(tmpDir, "out.mp4");
       fs.copyFileSync(videoIn, tmpVideo);
       fs.copyFileSync(srtPath, tmpSrt);
-      const style = `FontName=${cjkBurnFont().name},FontSize=18,PrimaryColour=&H00F4EAD0,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40`;
+      // ASS colours are &HAABBGGRR (BGR), NOT RGB. The intended cream #F4EAD0
+      // must be written B=D0 G=EA R=F4 → &H00D0EAF4; the old &H00F4EAD0 was RGB
+      // byte order and burned subtitles pale blue.
+      const style = `FontName=${cjkBurnFont().name},FontSize=18,PrimaryColour=&H00D0EAF4,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=40`;
       await sh("ffmpeg", [
         "-y", "-loglevel", "error",
         "-i", "in.mp4",
@@ -506,6 +574,8 @@ interface VoiceEntry {
   startSec: number;
   durationSec: number;
   file: string;
+  /** Scene text at synth time — used to detect a stale track after edits/reorder. */
+  text?: string;
 }
 
 /**
@@ -522,6 +592,7 @@ async function buildVoiceTrack(
   totalSec: number,
   projectRoot: string,
   outPath: string,
+  scenes: Scene[],
   perceivedStarts?: Map<number, number>
 ): Promise<boolean> {
   if (!fs.existsSync(voiceTrackPath)) return false;
@@ -530,16 +601,29 @@ async function buildVoiceTrack(
   };
   if (!track.scenes?.length) return false;
 
-  const inputs = track.scenes.map((e) => path.resolve(projectRoot, e.file));
+  // Guard against a stale voice-track: if scenes were reordered / re-worded since
+  // `pipeline tts` ran, an entry's index may now point at a different shot. Only
+  // mix entries whose index still maps to a scene with the SAME text — otherwise
+  // we'd glue old narration onto the wrong picture. (matches tts.stripSrtArtifacts)
+  const norm = (t: string | undefined) => (t ?? "").replace(/^\d+$/m, "").trim();
+  const textByIndex = new Map(scenes.map((s) => [s.index, norm(s.text)]));
+  const valid = track.scenes.filter((e) => textByIndex.get(e.index) === norm(e.text));
+  const stale = track.scenes.length - valid.length;
+  if (stale > 0) {
+    console.warn(`[voice] ⚠ ${stale} 条配音与当前分镜不匹配(重排/改文案后未重跑 tts)— 已跳过以免贴错镜头;需要时重跑 \`pipeline tts\`。`);
+  }
+  if (!valid.length) return false;
+
+  const inputs = valid.map((e) => path.resolve(projectRoot, e.file));
   const filterParts: string[] = [];
   inputs.forEach((_, i) => {
-    const e = track.scenes[i];
+    const e = valid[i];
     const startSec = perceivedStarts?.get(e.index) ?? e.startSec;
     const delayMs = Math.round(Math.max(0, startSec) * 1000);
     filterParts.push(`[${i}:a]adelay=${delayMs}|${delayMs},apad=whole_dur=${totalSec.toFixed(2)}[v${i}]`);
   });
-  const mixInputs = track.scenes.map((_, i) => `[v${i}]`).join("");
-  const mixLine = `${mixInputs}amix=inputs=${track.scenes.length}:dropout_transition=0:normalize=0:duration=longest[aout]`;
+  const mixInputs = valid.map((_, i) => `[v${i}]`).join("");
+  const mixLine = `${mixInputs}amix=inputs=${valid.length}:dropout_transition=0:normalize=0:duration=longest[aout]`;
 
   const ffArgs: string[] = ["-y", "-loglevel", "error"];
   for (const f of inputs) ffArgs.push("-i", f);
@@ -572,7 +656,7 @@ function computePerceivedTimeline(
       map.set(sceneIndices[i], 0);
       cursor = c.durationSec;
     } else {
-      const tDur = isCut ? 0 : Math.min(c.transitionDur, c.durationSec * 0.4, clips[i - 1].durationSec * 0.4);
+      const tDur = isCut ? CUT_XFADE_SEC : Math.min(c.transitionDur, c.durationSec * 0.4, clips[i - 1].durationSec * 0.4);
       const start = cursor - tDur;
       map.set(sceneIndices[i], start);
       cursor = start + c.durationSec;
@@ -683,7 +767,21 @@ async function stitchFinal(
   } else {
     console.log(`\n=== Stitching ${clips.length} scenes (all cuts) → ${silentPath} ===`);
     await stitchScenes(renderedPaths, silentPath);
-    perceivedTotal = sb.scenes.at(-1)?.endSec ?? 0;
+    // Plain concat (`-f concat -c copy`) places clips strictly back-to-back with
+    // NO overlap, so each scene's perceived start is the cumulative sum of prior
+    // clip durations — NOT the raw SRT startSec, which carries inter-cue gaps.
+    // Using the raw start would delay narration by the accumulated gap on any SRT
+    // with pauses, and lose sync entirely after a web-UI duration edit / reorder
+    // (the synth-time startSec no longer reflects the scene's on-screen position).
+    // Deriving from the CURRENT clips array keeps voice + sidecar SRT aligned.
+    const map = new Map<number, number>();
+    let cursor = 0;
+    for (let i = 0; i < clips.length; i++) {
+      map.set(sceneIndices[i], cursor);
+      cursor += clips[i].durationSec;
+    }
+    perceivedStarts = map;
+    perceivedTotal = cursor;
   }
 
   // Audio mix step — uses output/voice-track.json (from `pipeline tts`)
@@ -697,7 +795,7 @@ async function stitchFinal(
   if (fs.existsSync(voiceTrackPath)) {
     voiceMixedPath = path.join(outputDir, "voice-mixed.mp3");
     console.log(`=== Building voice track (${totalSec.toFixed(1)}s with ${perceivedStarts ? "perceived" : "raw"} delays) ===`);
-    const built = await buildVoiceTrack(voiceTrackPath, totalSec, projectRoot, voiceMixedPath, perceivedStarts);
+    const built = await buildVoiceTrack(voiceTrackPath, totalSec, projectRoot, voiceMixedPath, sb.scenes, perceivedStarts);
     if (!built) voiceMixedPath = null;
   }
   const bgmExists = fs.existsSync(bgmPath);
@@ -852,6 +950,7 @@ async function runRenderInner(opts: RenderOpts): Promise<void> {
     height: sb.project.height,
     fps: sb.project.fps,
     projectRoot: opts.projectRoot,
+    projectTitle: sb.project.title,
     design: resolveDesign(sb.project.design),
   };
 
@@ -886,14 +985,28 @@ async function runRenderInner(opts: RenderOpts): Promise<void> {
     const out = renderer(scene, sceneCtx);
     const lint = lintSource(out.engine === "hyperframes" ? out.html : out.tsx);
     if (lint.length) console.warn(`[scene ${scene.index}] 土味 lint: ${lint.map((f) => f.msg).join(" / ")}`);
-    const srcHash = sha1((out.engine === "hyperframes" ? out.html : out.tsx + JSON.stringify(out.props ?? {})) + JSON.stringify(sceneCtx.design));
+    const srcHash = sha1(
+      (out.engine === "hyperframes" ? out.html : out.tsx + JSON.stringify(out.props ?? {})) +
+        JSON.stringify(sceneCtx.design) +
+        "|env:" + RENDER_ENV_VERSION +
+        "|sf:" + sideFilesFingerprint(out.sideFiles),
+    );
     const sceneName = `scene-${String(scene.index).padStart(3, "0")}`;
     const sceneDir = path.join(scenesDir, `${sceneName}.${srcHash}`);
-    const mp4Path = path.join(scenesDir, `${sceneName}.mp4`);
+    // Content-addressed output: the srcHash is IN the filename, so a file that
+    // exists on disk IS exactly this scene's current content. This makes the
+    // cache reorder-safe (a moved scene can't collide with whatever mp4 sits at
+    // its new index) and trustworthy after edits — no separate hash-match needed.
+    const mp4Path = path.join(scenesDir, `scene.${srcHash}.mp4`);
 
-    if (!opts.force && fs.existsSync(mp4Path) && scene.renderedPath && scene.renderedHash === srcHash) {
-      console.log(`[scene ${scene.index}] cache hit, skipping.`);
+    if (!opts.force && fs.existsSync(mp4Path)) {
+      console.log(`[scene ${scene.index}] cache hit (${srcHash}), skipping.`);
       cachedPaths.set(scene.index, mp4Path);
+      // Heal the storyboard so renderedPath/Hash reflect the actual cached file
+      // (self-migrates old index-named renders and stale post-reorder paths).
+      scene.renderedPath = path.relative(opts.projectRoot, mp4Path);
+      scene.renderedHash = srcHash;
+      scene.status = "rendered";
       continue;
     }
     jobs.push({ scene, sceneDir, mp4Path, srcHash, out });
@@ -981,6 +1094,23 @@ async function runRenderInner(opts: RenderOpts): Promise<void> {
   // Update storyboard with rendered paths
   sb.stages.rendered = renderedPaths.length === sb.scenes.length;
   fs.writeFileSync(opts.storyboardPath, JSON.stringify(sb, null, 2));
+
+  // Any scene that errored is recorded above (status="failed") but per-scene
+  // failures were caught so earlier scenes still persist. Surface the failure
+  // now — otherwise the caller (CLI exit 0 / daemon task "succeeded") would
+  // report success while a stale final.mp4 masquerades as the new render.
+  const failedScenes = jobs.filter((j) => j.scene.status === "failed").map((j) => j.scene.index);
+  if (failedScenes.length) {
+    throw new Error(
+      `渲染失败:${failedScenes.length} 个镜头出错(#${failedScenes.join("、#")})。` +
+        `已成功的镜头已保存(重渲会命中缓存跳过),修好这些镜头后重新渲染。`,
+    );
+  }
+
+  // Reclaim disk: drop scene working-dirs / mp4s whose hash is no longer live.
+  // Remotion scene dirs carry a ~500MB node_modules each, so stale hashes from
+  // repeated re-renders would grow output/ without bound.
+  pruneStaleSceneArtifacts(scenesDir, new Set(sb.scenes.map((s) => s.renderedHash).filter(Boolean) as string[]));
 
   if (opts.only === null && renderedPaths.length === sb.scenes.length) {
     opts.onProgress?.(jobs.length, jobs.length, "拼接整片");

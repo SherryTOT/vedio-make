@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runCapture } from "./proc.ts";
+import { loadPromise, diffPromise } from "./promise.ts";
 import type { Storyboard } from "./types.ts";
 
 export interface QaFrame { tSec: number; path: string; yavg: number | null; black: boolean; flat: boolean }
@@ -148,9 +149,23 @@ export async function reviewFinal(
     const t = Math.max(0, Math.min(dchk - 0.05, dchk * fracs[i]));
     const jpg = path.join(qaDir, `frame-${i + 1}.jpg`);
     const st = await sampleFrame(final, t, jpg);
-    const black = st.yavg != null && st.yavg < 8;
+    const tSec = Math.round(t * 100) / 100;
+    if (st.yavg == null) {
+      // Extraction failed → we genuinely don't know. Say so instead of silently
+      // counting it as healthy content (which would mask an all-black render).
+      findings.push({ level: "warn", msg: `第 ${i + 1} 抽样帧(t=${tSec}s)抽取失败 — 无法判定黑/空帧` });
+      report.frames.push({ tSec, path: path.relative(projectRoot, jpg), yavg: null, black: false, flat: false });
+      continue;
+    }
+    // The stitched final.mp4 is limited-range (TV) H.264, where true black is
+    // luma 16 — NOT 0 — so the old `< 8` test could never fire on an all-black
+    // render. Flag black when average luma is at/below limited-range black (plus
+    // a little compression-noise margin) AND nothing bright appears anywhere
+    // (ymax), so a legitimately dark design (nocturne ~#1b1612 → luma ~35, or any
+    // frame carrying light text) is not misflagged as a broken frame.
+    const black = st.yavg <= 20 && (st.ymax == null || st.ymax <= 40);
     const flat = st.ymin != null && st.ymax != null && st.ymax - st.ymin < 3;
-    report.frames.push({ tSec: Math.round(t * 100) / 100, path: path.relative(projectRoot, jpg), yavg: st.yavg, black, flat });
+    report.frames.push({ tSec, path: path.relative(projectRoot, jpg), yavg: st.yavg, black, flat });
   }
   const blackFrames = report.frames.filter((f) => f.black);
   const flatFrames = report.frames.filter((f) => f.flat && !f.black);
@@ -161,8 +176,17 @@ export async function reviewFinal(
   }
   if (flatFrames.length) findings.push({ level: "warn", msg: `${flatFrames.length} 帧内容近乎空白/纯色(t=${flatFrames.map((f) => f.tSec + "s").join(", ")})` });
 
+  // ─ Delivery promise ─ If a promise was locked at approval, it — not the
+  //   current disk state — is the source of truth for "what this video promised".
+  //   This closes the silent-downgrade hole: a TTS run that failed leaves no mp3,
+  //   so disk-sniffing would say "no audio expected" and bless a silent film;
+  //   the promise remembers narration WAS intended and makes the missing mix an
+  //   error. It also flags any scene/design/method drift since approval.
+  const promise = loadPromise(outputDir);
   // ─ Audio ─
-  const audioExpected = ["voice-mixed.mp3", "voice-track.json", "bgm.mp3"].some((f) => fs.existsSync(path.join(outputDir, f)));
+  const audioExpected = promise
+    ? (promise.audio.voice || promise.audio.bgm)
+    : ["voice-mixed.mp3", "voice-track.json", "bgm.mp3"].some((f) => fs.existsSync(path.join(outputDir, f)));
   report.audio.expected = audioExpected;
   report.audio.present = report.video.hasAudio;
   if (report.video.hasAudio) {
@@ -175,6 +199,12 @@ export async function reviewFinal(
     if (report.audio.clipping) findings.push({ level: "warn", msg: `音频削波风险(max ${maxDb} dB ≥ 0)` });
   } else if (audioExpected) {
     findings.push({ level: "error", msg: "配了 TTS/BGM 但成片没有音轨 — 混音没生效" });
+  }
+
+  // ─ Promise drift ─ what changed between approval and delivery (warn-only:
+  //   the user may have deliberately changed things, but it must never be silent).
+  if (promise) {
+    for (const msg of diffPromise(promise, sb)) findings.push({ level: "warn", msg: `承诺契约:${msg}` });
   }
 
   // ─ Verdict ─

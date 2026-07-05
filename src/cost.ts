@@ -14,8 +14,12 @@ import type { Storyboard } from "./types.ts";
 
 const TTS_USD_PER_1K_CHARS: Record<string, number> = {
   minimax: 0.02, // ~¥0.1–0.3/万字 的粗略折算
-  openai: 0.015, // tts-1 ≈ $15 / 1M chars
-  // edge / voice(router→Edge) / piper = 免费
+  // "voice" is the DEFAULT router: bare voiceIds (incl. the default presenter_male)
+  // route to PAID MiniMax, NOT the free Edge path — so estimate it as MiniMax, not
+  // $0. Users on the free path pass ttsProvider:"edge" explicitly (absent → free).
+  voice: 0.02,
+  openai: 0.03, // adapter uses tts-1-hd ≈ $30 / 1M chars (tts-1 would be 0.015)
+  // edge / piper = 免费(不在表内 → 0)
 };
 const IMAGE_USD_PER_IMAGE: Record<string, number> = {
   minimax: 0.03,

@@ -7,7 +7,7 @@
  */
 
 import type { TtsClient } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 const OPENAI_VOICES: Array<{ id: string; label: string; gender?: "male" | "female"; tags?: string[] }> = [
   { id: "alloy",   label: "Alloy",   tags: ["neutral", "balanced"] },
@@ -26,7 +26,7 @@ export const openaiTts: TtsClient = {
   async tts({ text, voiceId = "onyx", speed = 1.0, format = "mp3" }) {
     const cfg = loadProviderConfig("openai");
     const baseUrl = cfg.base_url || "https://api.openai.com/v1";
-    const resp = await fetch(`${baseUrl}/audio/speech`, {
+    const resp = await fetchT(`${baseUrl}/audio/speech`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.api_key}`,

@@ -11,9 +11,10 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { getTts, withFallback } from "./providers/registry.ts";
+import { getTts, withFallback, fallbackChain } from "./providers/registry.ts";
 import { logDecision } from "./decisions.ts";
 import { touchVoice } from "./providers/minimax/voice-clone.ts";
+import { writeFileAtomic } from "./fsutil.ts";
 import type { Storyboard } from "./types.ts";
 
 /** Measure mp3 duration via ffprobe. Returns seconds, or null if probe fails. */
@@ -40,6 +41,11 @@ export interface VoiceEntry {
   text: string;
   file: string;          // relative to project root
   textHash: string;      // sha1(text + voiceId) — drives cache invalidation
+  /** Provider id that ACTUALLY produced this mp3 (may be a fallback, e.g. "edge"
+   *  after the primary "voice" router failed). A cache entry whose engine no
+   *  longer matches the resolvable primary is treated as a miss so a transient
+   *  downgrade never gets frozen in. */
+  engineId?: string;
   /** Actual mp3 duration (from ffprobe). Populated when probe succeeds. */
   audioDurationSec?: number;
   /** TTS speed actually used (may differ from caller's request after fit-retry). */
@@ -85,10 +91,16 @@ export async function runTts(opts: TtsOpts): Promise<VoiceTrack> {
   // walk the fallback chain (…→ Edge, which is free + keyless) and log the
   // downgrade to output/decisions.json.
   const outputDir = path.dirname(opts.trackPath);
-  const synth = (o: { text: string; voiceId?: string; speed?: number }, sceneIdx: number) =>
-    withFallback(
+  // The primary (chain-head) engine we WANT every mp3 to come from. If synthesis
+  // had to walk down the fallback chain, the entry records the actual engine so a
+  // later run (with the primary healthy again) regenerates instead of caching the
+  // degraded audio forever.
+  const primaryEngine = fallbackChain("tts", opts.provider)[0];
+  const synth = async (o: { text: string; voiceId?: string; speed?: number }, sceneIdx: number): Promise<{ audio: Buffer; engineId: string }> => {
+    let engineId = primaryEngine;
+    const audio = await withFallback(
       "tts", opts.provider, getTts,
-      (c) => c.tts(o),
+      (c, id) => { engineId = id; return c.tts(o); },
       (from, to, err) => {
         console.warn(`   ↪ [scene ${sceneIdx}] tts provider '${from}' 失败(${err.message.slice(0, 60)})— 回退到 '${to}'`);
         logDecision(outputDir, {
@@ -97,6 +109,8 @@ export async function runTts(opts: TtsOpts): Promise<VoiceTrack> {
         });
       },
     );
+    return { audio, engineId };
+  };
 
   const entries: VoiceEntry[] = [];
 
@@ -120,18 +134,26 @@ export async function runTts(opts: TtsOpts): Promise<VoiceTrack> {
     const relPath = path.relative(opts.projectRoot, absPath);
 
     const cached = existingByIdx.get(sc.index);
-    if (!opts.force && cached?.textHash === hash && fs.existsSync(absPath)) {
+    // A cache entry is only reusable if its recorded engine still matches the
+    // resolvable primary. `engineId === undefined` = legacy track (pre-fix) —
+    // trusted, not force-regenerated. A recorded fallback engine (e.g. "edge")
+    // that differs from the now-healthy primary is a miss → regenerate.
+    const engineOk = cached?.engineId === undefined || cached.engineId === primaryEngine;
+    if (!opts.force && cached?.textHash === hash && engineOk && fs.existsSync(absPath)) {
       console.log(`[scene ${sc.index}] tts cache hit — '${text.slice(0, 28)}…'`);
       entries.push(cached);
       continue;
+    }
+    if (cached?.textHash === hash && !engineOk) {
+      console.log(`[scene ${sc.index}] 上次配音由回退引擎 '${cached.engineId}' 生成、主引擎 '${primaryEngine}' 已可用 — 重新生成`);
     }
 
     const voiceLabel = effectiveVoice === opts.voiceId ? "" : ` [voice=${effectiveVoice}]`;
     console.log(`[scene ${sc.index}] tts → ${filename}${voiceLabel}  '${text.slice(0, 36)}${text.length > 36 ? "…" : ""}'`);
     try {
       // First pass at requested speed
-      let audio = await synth({ text, voiceId: effectiveVoice, speed: opts.speed }, sc.index);
-      fs.writeFileSync(absPath, audio);
+      let { audio, engineId } = await synth({ text, voiceId: effectiveVoice, speed: opts.speed }, sc.index);
+      writeFileAtomic(absPath, audio);
 
       // Adaptive-speed retry: if the spoken audio overflows the scene window,
       // recompute a speed that fits (with 0.2s tail margin) and re-render.
@@ -146,8 +168,10 @@ export async function runTts(opts: TtsOpts): Promise<VoiceTrack> {
             `   ↪ tts ${measured.toFixed(2)}s overflows ${sceneBudget.toFixed(2)}s window — retrying at speed=${fitSpeed.toFixed(2)}`
           );
           try {
-            audio = await synth({ text, voiceId: effectiveVoice, speed: fitSpeed }, sc.index);
-            fs.writeFileSync(absPath, audio);
+            const retry = await synth({ text, voiceId: effectiveVoice, speed: fitSpeed }, sc.index);
+            audio = retry.audio;
+            engineId = retry.engineId;
+            writeFileAtomic(absPath, audio);
             measured = probeDurationSec(absPath);
             usedSpeed = fitSpeed;
           } catch (e) {
@@ -168,6 +192,7 @@ export async function runTts(opts: TtsOpts): Promise<VoiceTrack> {
         text,
         file: relPath,
         textHash: hash,
+        engineId,
         audioDurationSec: measured ?? undefined,
         usedSpeed,
       } as VoiceEntry);

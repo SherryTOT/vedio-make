@@ -51,6 +51,7 @@ import { DESIGNS, DEFAULT_DESIGN_ID } from "./methods/designs.ts";
 import { lintStoryboard } from "./methods/lint.ts";
 import { buildFcpxml, buildEdl } from "./export_nle.ts";
 import { validateStoryboard } from "./validate.ts";
+import { lockPromise } from "./promise.ts";
 import { scoreSlideshowRisk } from "./slideshow.ts";
 import { estimateStoryboard } from "./cost.ts";
 import { readDecisions } from "./decisions.ts";
@@ -99,6 +100,18 @@ function pruneTasks(): void {
     .filter((t) => t.status === "succeeded" || t.status === "failed" || t.status === "cancelled")
     .sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0));
   for (const t of finished.slice(0, tasks.size - 80)) tasks.delete(t.id);
+}
+
+/** True while a render/stitch task for this project is queued or running. The
+ *  render process rewrites storyboard.json incrementally (per-scene renderedPath/
+ *  status), so a concurrent client PUT would clobber that state — and vice-versa.
+ *  We reject edits during a render rather than silently losing one side. */
+function projectRenderBusy(projectId: string): boolean {
+  for (const t of tasks.values()) {
+    if (t.projectId !== projectId) continue;
+    if ((t.op === "render" || t.op === "stitch") && (t.status === "queued" || t.status === "running")) return true;
+  }
+  return false;
 }
 
 function pushLog(t: Task, line: string): void {
@@ -266,10 +279,13 @@ async function runTaskBody(t: Task, body: any): Promise<void> {
       break;
     case "render":
       // Full render (only==null) from the app = the user's deliberate approval.
+      // Lock the delivery promise here too, so the post-render self-review can
+      // flag a silent downgrade (dropped narration, removed scene, design swap).
       if ((body.only ?? null) === null) {
         try {
           const _sb = JSON.parse(fs.readFileSync(sbPath, "utf8"));
           if (_sb.stages && !_sb.stages.approved) { _sb.stages.approved = true; fs.writeFileSync(sbPath, JSON.stringify(_sb, null, 2)); }
+          lockPromise(_sb, path.join(proj.dir, "output"));
         } catch {}
       }
       await runRender({
@@ -392,7 +408,9 @@ function serveStatic(res: http.ServerResponse, pathname: string, token: string):
   let rel = decodeURIComponent(pathname);
   if (rel === "/" || rel === "") return serveIndexHtml(res, token);
   const abs = path.resolve(PUBLIC_DIR, "." + rel);
-  if (!abs.startsWith(PUBLIC_DIR) || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+  // Boundary must include the separator: bare startsWith would let a sibling dir
+  // like `<PUBLIC_DIR>-evil` slip through.
+  if ((abs !== PUBLIC_DIR && !abs.startsWith(PUBLIC_DIR + path.sep)) || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
     // Unknown non-asset path → fall back to the SPA shell.
     if (path.extname(abs) === "") return serveIndexHtml(res, token);
     return sendJson(res, 404, { error: "not found" });
@@ -404,6 +422,27 @@ function serveStatic(res: http.ServerResponse, pathname: string, token: string):
     "Cache-Control": "no-store",
   });
   fs.createReadStream(abs).pipe(res);
+}
+
+/**
+ * DNS-rebinding guard. The daemon binds to loopback by default, but a browser
+ * can be tricked (DNS rebinding) into sending requests to 127.0.0.1 with an
+ * attacker's Host header — then read the token-injected index.html and drive
+ * the authed API (spend provider credits, spawn renders, read project files).
+ * Rejecting any Host that isn't the loopback we bound to closes that vector.
+ * If the operator explicitly bound to all interfaces (0.0.0.0 / ::), they opted
+ * into network exposure, so we don't second-guess the Host there.
+ */
+function hostAllowed(reqHost: string | undefined, bindHost: string): boolean {
+  if (bindHost === "0.0.0.0" || bindHost === "::") return true;
+  if (!reqHost) return false;
+  let hostname: string;
+  try {
+    hostname = new URL(`http://${reqHost}`).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  } catch {
+    return false;
+  }
+  return new Set(["127.0.0.1", "localhost", "::1", bindHost.toLowerCase()]).has(hostname);
 }
 
 function authOK(req: http.IncomingMessage, token: string): boolean {
@@ -446,6 +485,11 @@ export async function startServer(opts: {
     try {
       const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
       const route = `${req.method} ${url.pathname}`;
+
+      // DNS-rebinding guard — reject any request whose Host isn't our loopback.
+      if (!hostAllowed(req.headers.host, opts.host)) {
+        return sendJson(res, 403, { error: "forbidden host (bind to 0.0.0.0 to allow remote access)" });
+      }
 
       // Open endpoints
       if (route === "GET /api/health") return sendJson(res, 200, { ok: true, version: VERSION });
@@ -546,7 +590,15 @@ export async function startServer(opts: {
         }
 
         if (req.method === "PUT" && sub === "/storyboard") {
+          // Don't let a client save race the render process's incremental writes.
+          if (projectRenderBusy(projId)) {
+            return sendJson(res, 409, { error: "渲染进行中,暂不能保存分镜(避免与渲染进程互相覆盖状态文件)。等渲染完成后再编辑。" });
+          }
           const body = await readBody(req);
+          // Reject malformed JSON instead of writing a corrupt project state file.
+          try { JSON.parse(body); } catch {
+            return sendJson(res, 400, { error: "分镜不是合法 JSON,已拒绝写入(避免损坏项目状态)。" });
+          }
           fs.writeFileSync(path.join(proj.dir, "output/storyboard.json"), ensureDesignDefault(body));
           return sendJson(res, 200, { ok: true });
         }
@@ -624,7 +676,9 @@ export async function startServer(opts: {
           const rel = decodeURIComponent(fileM[1]);
           // Sanitize: ensure no escape from project dir
           const abs = path.resolve(proj.dir, rel);
-          if (!abs.startsWith(proj.dir) || !fs.existsSync(abs)) {
+          // Boundary must include the separator so a sibling project dir sharing
+          // this id as a prefix can't be read via ../<id>-other/… traversal.
+          if ((abs !== proj.dir && !abs.startsWith(proj.dir + path.sep)) || !fs.existsSync(abs)) {
             return sendJson(res, 404, { error: "file not found" });
           }
           const ext = path.extname(abs).toLowerCase();

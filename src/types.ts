@@ -86,13 +86,10 @@ export interface DesignSelection {
   overrides?: Partial<DesignTokens>;
 }
 
-/** Fully-resolved tokens a renderer reads. Always has motion + the preset id.
- *  terra/terra2 are temporary migration aliases for accent/accent2. */
+/** Fully-resolved tokens a renderer reads. Always has motion + the preset id. */
 export type ResolvedDesign = DesignTokens & {
   motion: DesignMotion;
   __presetId: string;
-  terra: string;   // alias → accent
-  terra2: string;  // alias → accent2
 };
 
 // ───────────────────────────────────────────────────────────────────────────

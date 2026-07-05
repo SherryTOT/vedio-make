@@ -95,7 +95,25 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .task-label { font-weight: 650; color: var(--accent-dark); white-space: nowrap; }
 .task-track { flex: 0 0 200px; height: 6px; border-radius: 6px; background: var(--line); overflow: hidden; }
 .task-fill { height: 100%; width: 0%; background: var(--accent); transition: width .3s ease; }
-.task-log { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.task-log { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.task-cancel { min-height: 26px; padding: 3px 12px; border-radius: 7px; font-size: 11.5px; font-weight: 650;
+  border: 1px solid var(--control-border); background: var(--raised); color: var(--muted); white-space: nowrap; }
+.task-cancel:hover:not(:disabled) { border-color: var(--st-fail); color: var(--st-fail); }
+.task-cancel:disabled { opacity: .5; }
+
+/* task report (post-task findings: validate errors, per-scene failures, QA verdict) */
+.task-report { position: fixed; z-index: 140; right: 22px; bottom: 22px; width: min(420px, calc(100% - 44px));
+  max-height: 46vh; display: flex; flex-direction: column; background: var(--raised);
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.tr-head { display: flex; align-items: center; justify-content: space-between; padding: 9px 13px;
+  background: var(--subtle); border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.tr-x { border: none; background: none; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.tr-x:hover { color: var(--ink); }
+.tr-list { overflow-y: auto; padding: 6px 0; }
+.tr-item { padding: 6px 14px; font-size: 12px; line-height: 1.45; border-left: 3px solid transparent; }
+.tr-item.error { border-left-color: var(--st-fail); color: var(--ink); }
+.tr-item.warn { border-left-color: var(--accent); color: var(--muted); }
+.tr-item.ok { border-left-color: var(--st-ok, var(--accent)); color: var(--muted); }
 
 /* projects grid */
 .projects-view { width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 48px 0 72px; }

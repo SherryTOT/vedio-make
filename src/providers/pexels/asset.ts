@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { AssetClient, AssetSearchResult } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 export const pexelsAsset: AssetClient = {
   id: "pexels",
@@ -29,9 +29,9 @@ export const pexelsAsset: AssetClient = {
     });
     if (orientation) params.set("orientation", orientation);
 
-    const resp = await fetch(`${baseUrl}?${params}`, {
+    const resp = await fetchT(`${baseUrl}?${params}`, {
       headers: { Authorization: cfg.api_key },
-    });
+    }, 30_000);
     if (!resp.ok) throw new Error(`Pexels search ${resp.status}: ${await resp.text()}`);
     const data = (await resp.json()) as any;
     const items = isVideo ? data.videos : data.photos;
@@ -77,7 +77,7 @@ export const pexelsAsset: AssetClient = {
 
   async download(result, destPath) {
     if (!result.downloadUrl) throw new Error(`pexels: result has no downloadUrl`);
-    const r = await fetch(result.downloadUrl);
+    const r = await fetchT(result.downloadUrl);
     if (!r.ok) throw new Error(`pexels download ${r.status} from ${result.downloadUrl}`);
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
     const buf = Buffer.from(await r.arrayBuffer());

@@ -71,8 +71,9 @@ export function loadProviderConfig(providerId: string): ProviderConfig {
   if (!apiKey) {
     throw new Error(
       `No API key for provider '${providerId}'. ` +
-        `Tried: ${providerId.toUpperCase()}_API_KEY env, providers.json plain field, macOS Keychain (service=${KEYCHAIN_SERVICE}, account=${providerId}). ` +
-        `Set the env var or add the key via Restate's UI (Settings → LLM).`
+        `Tried: ${providerId.toUpperCase()}_API_KEY env, ~/.video-toolkit/providers.json, macOS Keychain (service=${KEYCHAIN_SERVICE}, account=${providerId}). ` +
+        `Set the env var (e.g. export ${providerId.toUpperCase()}_API_KEY=…) or see README "Provider keys". ` +
+        `Tip: the keyless free path needs no key — use Edge TTS + Pexels/Unsplash + hand-picked methods.`
     );
   }
   return {
@@ -82,6 +83,17 @@ export function loadProviderConfig(providerId: string): ProviderConfig {
     api_key: apiKey,
     model: cfg?.model ?? "",
   };
+}
+
+/**
+ * fetch() with a hard timeout. Every provider network call runs inside the
+ * daemon's FIFO task chain, so a single stalled request (no response, half-open
+ * socket) would wedge ALL queued tasks indefinitely. AbortSignal.timeout aborts
+ * the request after `timeoutMs`, surfacing a catchable error instead of a hang.
+ * Respects a caller-supplied signal if one is already set.
+ */
+export function fetchT(url: string, init: RequestInit = {}, timeoutMs = 120_000): Promise<Response> {
+  return fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(timeoutMs) });
 }
 
 export function hasProviderKey(providerId: string): boolean {

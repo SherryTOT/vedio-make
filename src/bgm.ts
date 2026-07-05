@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { getMusic } from "./providers/registry.ts";
+import { writeFileAtomic } from "./fsutil.ts";
 import type { Storyboard } from "./types.ts";
 
 interface BgmOpts {
@@ -73,8 +74,8 @@ export async function runBgm(opts: BgmOpts): Promise<{ path: string; prompt: str
   console.log(`[bgm] prompt: ${prompt.slice(0, 80)}…`);
   const audio = await musicClient.music({ prompt, lyrics: "##\n##" });
   fs.mkdirSync(path.dirname(opts.outPath), { recursive: true });
-  fs.writeFileSync(opts.outPath, audio);
-  fs.writeFileSync(cachePath, audio); // cache for next run
+  writeFileAtomic(cachePath, audio); // write the cache first, atomically…
+  fs.copyFileSync(cachePath, opts.outPath); // …then publish from the complete cache
   console.log(`✓ bgm mp3 → ${path.relative(process.cwd(), opts.outPath)}  (${(audio.length / 1024).toFixed(0)} KB)`);
   return { path: opts.outPath, prompt };
 }

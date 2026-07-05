@@ -41,7 +41,9 @@
         <button class="ghost" data-op-export type="button" title="导出 FCPXML 时间线,可在 Final Cut / DaVinci / 剪映 打开收尾">导出剪辑</button>
         <button class="op" data-op="analyze" type="button" title="让 Claude 给每个镜头挑可视化方法">分析</button>
         <button class="op" data-op="images" type="button" title="为需要图片的镜头生成配图">配图</button>
-        <button class="op primary" data-op="render" type="button" title="渲染全部镜头并拼成 final.mp4">全部渲染</button>
+        <button class="op" data-op="tts" type="button" title="为每个镜头生成旁白配音(无 key 时走免费 Edge 音色)">配音</button>
+        <button class="op" data-op="bgm" type="button" title="生成一条背景音乐(需 provider key)">配乐</button>
+        <button class="op primary" data-op="render" type="button" title="渲染全部镜头并拼成 final.mp4(配音/配乐会自动混入)">全部渲染</button>
       </div>
     </div>
   </header>
@@ -50,6 +52,12 @@
     <span id="task-label" class="task-label"></span>
     <div class="task-track"><div id="task-fill" class="task-fill"></div></div>
     <span id="task-log" class="task-log"></span>
+    <button id="task-cancel" class="task-cancel" type="button" title="取消当前任务" hidden>取消</button>
+  </div>
+
+  <div id="task-report" class="task-report" hidden>
+    <div class="tr-head"><strong id="tr-title">报告</strong><button id="tr-close" class="tr-x" type="button" aria-label="关闭">×</button></div>
+    <div id="tr-list" class="tr-list"></div>
   </div>
 
   <main id="projects-view" class="projects-view">

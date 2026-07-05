@@ -4,7 +4,7 @@ const AUTH = TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
 const $ = (s) => document.querySelector(s);
 
 const TRANSITIONS = ["", "cut", "fade", "dip-to-black", "wipe-left", "wipe-right", "push-up"];
-const state = { pid: null, sb: null, catalog: null, designs: null, lint: null, saveTimer: null, busy: false };
+const state = { pid: null, sb: null, catalog: null, designs: null, lint: null, saveTimer: null, busy: false, dirty: false, curTask: null, lastTask: null };
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { ...(opts.headers || {}), ...AUTH } });
@@ -159,11 +159,11 @@ function buildRow(sc, i) {
   exr.appendChild(labeled("转场", transitionSelect(i, sc.transition)));
   if (state.designs) exr.appendChild(labeled("风格", scenePresetSelect(i, sc.style)));
   const badges = el("div", "chips");
-  if (sc.motion && sc.motion.kind && sc.motion.kind !== "still") badges.appendChild(el("span", "chip", "运镜·" + sc.motion.kind));
+  if (sc.motion && sc.motion.kind && sc.motion.kind !== "still") badges.appendChild(el("span", "chip", "运镜·" + esc(sc.motion.kind)));
   if (sc.imageStyle) badges.appendChild(el("span", "chip", esc(sc.imageStyle)));
   if (sc.needsMatting) badges.appendChild(el("span", "chip", "抠像"));
   if (sc.burnSubtitle) badges.appendChild(el("span", "chip", "烧字幕"));
-  if (sc.style) badges.appendChild(el("span", "chip", "风格·" + (sc.style.presetId || "自定义")));
+  if (sc.style) badges.appendChild(el("span", "chip", "风格·" + esc(sc.style.presetId || "自定义")));
   const lf = state.lint && state.lint[sc.index];
   if (lf && lf.length) { const c = el("span", "chip chip-warn", "⚠ 土味 " + lf.length); c.title = lf.map((f) => f.msg).join("\n"); badges.appendChild(c); }
   if (badges.children.length) exr.appendChild(labeled("修饰", badges));
@@ -305,6 +305,7 @@ function stStatusText(s) { return { pending: "待渲染", rendering: "渲染中"
 
 // ─── save (debounced PUT of whole storyboard) ───
 function scheduleSave() {
+  state.dirty = true;
   setSaveStatus("saving", "保存中…");
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(save, 600);
@@ -313,32 +314,89 @@ async function save() {
   if (!state.sb) return;
   try {
     await api(`/api/projects/${state.pid}/storyboard`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state.sb) });
+    state.dirty = false;
     setSaveStatus("", "已保存");
-  } catch (e) { setSaveStatus("error", "保存失败"); toast("保存失败:" + e.message, "error"); }
+  } catch (e) {
+    // Render in progress rejects the save (409) so it can't clobber the render's
+    // incremental writes. Keep the local edits and retry once the render frees up
+    // — never report "已保存" when the bytes didn't land.
+    if (/渲染进行中|409/.test(e.message)) {
+      setSaveStatus("saving", "渲染中,稍后自动保存");
+      clearTimeout(state.saveTimer);
+      state.saveTimer = setTimeout(save, 5000);
+    } else {
+      setSaveStatus("error", "保存失败"); toast("保存失败:" + e.message, "error");
+    }
+  }
 }
 function setSaveStatus(state_, text) { const s = $("#save-status"); s.dataset.state = state_; s.textContent = text; }
 
 // ─── ops (analyze / images / render) with task polling ───
+// Returns true only when the task genuinely succeeded, so callers like 「看整片」
+// can refuse to play a stale artifact after a failed stitch.
 async function runOp(op, body, label) {
-  if (state.busy) return toast("有任务在跑,稍候");
+  if (state.busy) { toast("有任务在跑,稍候"); return false; }
   state.busy = true; setOpsDisabled(true);
+  $("#task-report").hidden = true;
   const bar = $("#task-bar"); bar.hidden = false;
   $("#task-label").textContent = label || op; $("#task-fill").style.width = "4%"; $("#task-log").textContent = "启动…";
+  const cancelBtn = $("#task-cancel"); cancelBtn.hidden = false; cancelBtn.disabled = false;
+  state.lastTask = null;
+  let ok = false, taskErr = null;
   try {
     const task = await api(`/api/projects/${state.pid}/${op}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    state.curTask = task.id;
     await pollTask(task.id);
+    ok = true;
+  } catch (e) { taskErr = e; }
+  state.curTask = null; cancelBtn.hidden = true;
+  // Always reconcile with disk — even on FAILURE the task may have written
+  // per-scene render state (renderedPath/hash/status) that the pre-task local
+  // copy lacks; a naive overwrite either way would lose data.
+  try {
     const fresh = await api(`/api/projects/${state.pid}/storyboard`).catch(() => null);
-    if (fresh) { state.sb = fresh; renderBoardHeader(); renderScenes(); }
-    toast(`${label || op} 完成`);
-  } catch (e) { toast(`${label || op} 失败:${e.message}`, "error"); }
-  finally { state.busy = false; setOpsDisabled(false); setTimeout(() => ($("#task-bar").hidden = true), 1200); }
+    if (fresh) reconcileAfterTask(fresh);
+  } catch {}
+  await showTaskReport(op, taskErr);
+  state.busy = false; setOpsDisabled(false);
+  setTimeout(() => { if (!state.busy) $("#task-bar").hidden = true; }, 1400);
+  if (taskErr) toast(`${label || op} 失败:${taskErr.message}`, "error");
+  else toast(`${label || op} 完成`);
+  return ok;
 }
 function setOpsDisabled(d) { document.querySelectorAll(".op, .render-one").forEach((b) => (b.disabled = d)); }
+
+// Merge disk state after a task WITHOUT discarding unsaved local edits. When the
+// board is clean, disk is authoritative (wholesale replace). When there are
+// unsaved edits, keep them and graft only render-owned fields, then persist the
+// merge — otherwise the pending autosave PUT would clobber renderedPath/stages.
+function reconcileAfterTask(fresh) {
+  if (!state.dirty) {
+    state.sb = fresh; renderBoardHeader(); renderScenes(); return;
+  }
+  const byIdx = new Map((fresh.scenes || []).map((s) => [s.index, s]));
+  for (const sc of state.sb.scenes) {
+    const d = byIdx.get(sc.index);
+    if (d) { sc.renderedPath = d.renderedPath; sc.renderedHash = d.renderedHash; sc.status = d.status; }
+  }
+  if (fresh.stages) state.sb.stages = fresh.stages;
+  renderBoardHeader(); renderScenes();
+  scheduleSave(); // persist merged copy (local edits + freshly-written render fields)
+}
+
 async function pollTask(id) {
+  let misses = 0;
   for (;;) {
     await new Promise((r) => setTimeout(r, 1000));
     let t;
-    try { t = await api(`/api/tasks/${id}`); } catch { continue; }
+    try { t = await api(`/api/tasks/${id}`); misses = 0; }
+    catch (e) {
+      // Daemon restarted / task table cleared / token rotated → the task id is
+      // gone. Don't spin forever locking the UI; after a few misses, bail out.
+      if (++misses >= 5) throw new Error("与后台失联(daemon 可能已重启)— 刷新页面重连");
+      continue;
+    }
+    state.lastTask = t;
     $("#task-fill").style.width = Math.max(4, t.progressPct || 0) + "%";
     $("#task-log").textContent = (t.log && t.log[t.log.length - 1]) || t.message || "";
     if (t.status === "succeeded") return;
@@ -346,6 +404,38 @@ async function pollTask(id) {
     if (t.status === "cancelled") throw new Error("已取消");
   }
 }
+
+// Surface what a task actually produced: pre-render validate errors + per-scene
+// render failures + the post-render self-review verdict — instead of the single
+// ephemeral log line the user used to get.
+async function showTaskReport(op, taskErr) {
+  const panel = $("#task-report"), list = $("#tr-list");
+  const items = [];
+  if (taskErr) {
+    items.push({ level: "error", msg: taskErr.message });
+    // The concrete reasons (validate ✗ lines, per-scene FAILED) live in the log.
+    for (const l of (state.lastTask?.log || []).slice(-12)) {
+      if (/✗|✘|FAILED|校验|missing-|stale-|missing_/i.test(l)) items.push({ level: "warn", msg: l.replace(/^\[\d\d:\d\d:\d\d\]\s*/, "") });
+    }
+  }
+  for (const s of (state.sb?.scenes || [])) {
+    if (s.status === "failed") items.push({ level: "error", msg: `镜头 #${s.index} 渲染失败` });
+  }
+  if (op === "render" || op === "stitch") {
+    const qa = await api(`/api/projects/${state.pid}/files/output/qa-report.json`).catch(() => null);
+    if (qa && Array.isArray(qa.findings)) {
+      const v = qa.status;
+      items.unshift({ level: v === "fail" ? "error" : v === "warn" ? "warn" : "ok", msg: `成片自检:${v === "pass" ? "通过 ✓" : v === "warn" ? "有提醒" : "未通过"}` });
+      for (const f of qa.findings) if (f.level && f.level !== "info") items.push({ level: f.level === "error" ? "error" : "warn", msg: f.msg });
+    }
+  }
+  if (!items.length) { panel.hidden = true; return; }
+  $("#tr-title").textContent = `${label(op)} · 报告`;
+  list.innerHTML = "";
+  for (const it of items) { const row = el("div", "tr-item " + it.level); row.textContent = it.msg; list.appendChild(row); }
+  panel.hidden = false;
+}
+function label(op) { return { analyze: "分析", images: "配图", tts: "配音", bgm: "配乐", render: "全部渲染", stitch: "拼接整片" }[op] || op; }
 
 // ─── lightbox ───
 function lightbox(kind, src) {
@@ -381,7 +471,7 @@ $("#back-home").addEventListener("click", showProjects);
 $("#refresh-projects").addEventListener("click", loadProjects);
 document.querySelectorAll(".op").forEach((b) => b.addEventListener("click", () => {
   const op = b.dataset.op;
-  runOp(op, op === "render" ? {} : {}, { analyze: "分析镜头", images: "生成配图", render: "全部渲染" }[op]);
+  runOp(op, {}, { analyze: "分析镜头", images: "生成配图", tts: "生成配音", bgm: "生成配乐", render: "全部渲染" }[op]);
 }));
 
 const dzBtn = document.querySelector("[data-op-design]");
@@ -394,11 +484,23 @@ if (finalBtn) finalBtn.addEventListener("click", async () => {
   const scenes = state.sb.scenes || [];
   const allRendered = scenes.length > 0 && scenes.every((s) => s.renderedPath);
   if (!allRendered) return toast("还有镜头未渲染 — 先「全部渲染」或逐镜「渲染此条」", "error");
-  // Re-assemble final.mp4 from the rendered scenes (reliable, no re-render), then play.
-  try { await runOp("stitch", {}, "拼接整片"); } catch { return; }
+  // Re-assemble final.mp4 from the rendered scenes (reliable, no re-render), then
+  // play. Only play if the stitch actually succeeded — otherwise we'd show a
+  // stale final.mp4 from a previous run and pass it off as the new one.
+  const ok = await runOp("stitch", {}, "拼接整片");
+  if (!ok) return;
   const u = fileUrl("output/final.mp4");
   lightbox("video", u + (u.includes("?") ? "&" : "?") + "_=" + Date.now());
 });
+
+// Cancel the running task (best-effort — server signals cancelRequested).
+$("#task-cancel").addEventListener("click", async () => {
+  if (!state.curTask) return;
+  $("#task-cancel").disabled = true;
+  try { await api(`/api/tasks/${state.curTask}/cancel`, { method: "POST" }); toast("已请求取消…"); }
+  catch (e) { $("#task-cancel").disabled = false; toast("取消失败:" + e.message, "error"); }
+});
+$("#tr-close").addEventListener("click", () => ($("#task-report").hidden = true));
 const addSceneBtn = document.querySelector("#add-scene");
 if (addSceneBtn) addSceneBtn.addEventListener("click", () => { if (state.sb) addScene(); });
 

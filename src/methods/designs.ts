@@ -113,8 +113,7 @@ export const DESIGNS: Record<string, Design> = {
   },
 };
 
-/** Resolve a single selection: preset tokens shallow-merged with overrides.
- *  Emits accent↔terra aliases for the migration window. */
+/** Resolve a single selection: preset tokens shallow-merged with overrides. */
 export function resolveDesign(sel: DesignSelection | undefined): ResolvedDesign {
   const preset = DESIGNS[sel?.presetId ?? DEFAULT_DESIGN_ID] ?? DESIGNS[DEFAULT_DESIGN_ID];
   const tokens: DesignTokens = { ...preset.tokens, ...(sel?.overrides ?? {}) };
@@ -122,9 +121,7 @@ export function resolveDesign(sel: DesignSelection | undefined): ResolvedDesign 
     ...tokens,
     motion: { ...preset.motion, ...(sel?.overrides?.motion ?? {}) },
     __presetId: preset.id,
-    // ── migration aliases — remove once registry has no `.terra` reads ──
-    terra: tokens.accent, terra2: tokens.accent2,
-  } as ResolvedDesign;
+  };
 }
 
 /** Compose project + scene selection. Scene wins.
@@ -137,13 +134,18 @@ export function resolveSceneDesign(
   const base = resolveDesign(project);
   if (!scene) return base;
   if (scene.presetId && scene.presetId !== base.__presetId) {
-    return resolveDesign({ presetId: scene.presetId, overrides: scene.overrides });
+    if (DESIGNS[scene.presetId]) {
+      return resolveDesign({ presetId: scene.presetId, overrides: scene.overrides });
+    }
+    // Unknown/typo'd scene presetId: DON'T silently snap to inkwork (that's the
+    // old bug — a typo dragged the scene onto the default preset instead of the
+    // project's). Keep the project's design and just layer any overrides.
+    console.warn(`[design] 镜头风格 presetId '${scene.presetId}' 未知 — 沿用项目风格 '${base.__presetId}'`);
   }
   const tokens: DesignTokens = { ...base, ...(scene.overrides ?? {}) };
   return {
     ...tokens,
     motion: { ...base.motion, ...(scene.overrides?.motion ?? {}) },
     __presetId: base.__presetId,
-    terra: tokens.accent, terra2: tokens.accent2,
-  } as ResolvedDesign;
+  };
 }

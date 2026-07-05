@@ -3,13 +3,13 @@
  */
 
 import type { MusicClient } from "../types.ts";
-import { loadProviderConfig } from "../shared.ts";
+import { loadProviderConfig, fetchT } from "../shared.ts";
 
 export const minimaxMusic: MusicClient = {
   id: "minimax",
   async music({ prompt, lyrics, format = "mp3" }) {
     const cfg = loadProviderConfig("minimax");
-    const resp = await fetch(`${cfg.base_url}/music_generation`, {
+    const resp = await fetchT(`${cfg.base_url}/music_generation`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${cfg.api_key}`,
