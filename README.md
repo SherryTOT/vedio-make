@@ -1,111 +1,107 @@
 # Vedio Make
 
-> 字幕 → 分镜 → 渲染 的 AI 视频生成管线 · MIT 开源
+> 字幕(SRT) → 分镜 → 渲染 → `final.mp4` 的 AI 视频生成管线 · 本地优先 · 零运行时依赖 · MIT
 
-字幕 → 方法选择 → 分镜确认 → 渲染 的视频生成管线。Claude 当大脑（每条字幕挑选合适的视觉化方法），CLI 当肌肉（解析 SRT、生成代码、调用 HyperFrames / Remotion / ffmpeg 渲染）。
+Claude 当大脑(给每条字幕挑可视化方法),CLI 当肌肉(解析 SRT、生成合成源、调用 **HyperFrames / Remotion / ffmpeg** 渲染、拼接成片)。既能在网页分镜台里点点点,也能纯 CLI 跑。
 
-## 安装
+## 环境要求
+
+- **Node ≥ 18**(用 `tsx` 直接跑 TypeScript,无构建步骤)
+- 本机装好 **`ffmpeg`**(拼接 / 混音 / 抽帧自检都靠它)
+- 渲染引擎 **HyperFrames / Remotion** 通过 `npx --yes` 按需拉取(首次联网,之后走缓存)
+- 运行时**零 npm 依赖**;`npm install` 只装 devDeps(`tsx` / `typescript`)
 
 ```bash
-cd pipeline
+git clone https://github.com/SherryTOT/vedio-make.git
+cd vedio-make
 npm install
 ```
 
-依赖：Node 18+，本机装好 `ffmpeg`。HyperFrames 和 Remotion 通过 `npx --yes` 按需拉取。
-
-## 流程
-
-### 1. 准备输入
-
-- 把字幕放到 `input/sample.srt`（SRT 格式，带时间码）
-- 把素材（图片 / Lottie JSON / Rive .riv / 视频 / 数据 JSON）放到 `assets/`
-- 视项目需要修改 `design.md`（颜色、字体、动效个性）
-
-### 2. 解析字幕
+## 最快上手:网页分镜台
 
 ```bash
-npm run plan -- input/sample.srt --title "标题"
+npm run serve          # daemon 起在 http://127.0.0.1:8766/
 ```
 
-产出 `output/storyboard.json` —— 每条字幕一个 scene，`method` / `fallback` / `reasoning` 全部 `null`。
+打开 `http://127.0.0.1:8766/` → 「新建项目」→ 粘贴一段 SRT 字幕 → 自动切出分镜。之后在表格里逐镜编辑文案 / 方法 / 风格,一条工具栏走完全流程:
 
-### 3. Claude 填方法
+**分析**(Claude 自动选方法)→ **配图** → **配音** → **配乐** → **全部渲染** → **看整片** → **导出剪辑**(FCPXML / EDL,可进 Final Cut / DaVinci / 剪映)。
 
-在 Claude Code 对话里让 Claude：
+> daemon 默认只绑 `127.0.0.1` 且带 bearer token 鉴权(未设 `--token` 时自动生成并注入页面)。只在本机可用;要局域网访问需显式 `--host 0.0.0.0`(自担风险)。
 
-1. 读 `methods/catalog.json`（可选方法列表）
-2. 读 `output/storyboard.json`（要填的 scene）
-3. 读 `design.md` + `assets/` 文件清单
-4. 给每个 scene 写 `method`（reliability=S 优先）/ `fallback` / `reasoning` / `assets`
+## 零 key 免费路径
 
-### 4. 生成分镜预览
+不配任何 API key 也能出片——只是方法要自己挑(不跑「分析」这步 LLM):
 
-```bash
-npm run storyboard
-```
+1. `npm run serve`,新建项目粘贴 SRT(`plan` 只做解析,不需 key)
+2. 在分镜台里给每镜手动选 `method`(下拉里都是已实现的方法)
+3. **配音**用免费的 Edge 音色(无 MiniMax key 时自动降级到 Edge,零成本)
+4. **全部渲染** → HyperFrames / Remotion / ffmpeg 全部本地、免费
 
-产出 `output/storyboard.html` —— 浏览器打开看每个 scene 的卡片（方法名 + tier 色块 + 素材引用 + 理由）。
+配图(图库/生成)和「分析」需要 provider key,见下。
 
-### 5. Review + 改
+## Provider keys(可选)
 
-用户在 storyboard.html 看完，对不满意的 scene 直接编辑 `output/storyboard.json`（改 method id），或者让 Claude 改。
+只有用到 LLM(分析 / 改写 / 翻译)、付费配音、配图生成、联网检索时才需要。三条解析通道(按优先级):
 
-### 6. 渲染
+1. **环境变量** `<PROVIDER>_API_KEY`,例如 `export MINIMAX_API_KEY=…` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `TAVILY_API_KEY` / `PEXELS_API_KEY`
+2. `~/.video-toolkit/providers.json`(`{ "providers": [{ "id": "minimax", "base_url": "…", "api_key": "…", "model": "…" }] }`)
+3. macOS Keychain(service `com.restate.mac`,account = provider id)
 
-```bash
-npm run render
-```
+仓库内**不含任何 key**。缺 key 时相关命令会报清楚缺哪个、去哪配。免费兜底:配音有 Edge,回退链会在主 provider 失败时自动降级并记一条决策日志(`output/decisions.json`)。
 
-- 每个 scene 独立渲染到 `output/scenes/scene-XXX.mp4`
-- HyperFrames 方法 → 写临时 HTML → `npx hyperframes render`
-- Remotion 方法 → 写临时 TSX + 安装依赖 → `npx remotion render`
-- 全部成功后 ffmpeg concat 拼接成 `output/final.mp4`
+## CLI(`pipeline <cmd>` 或 `npx tsx src/cli.ts <cmd>`)
 
-只重渲一个 scene：
+| 命令 | 作用 |
+|---|---|
+| `plan --in x.srt --title …` | SRT → `storyboard.json`(每镜一个 scene,方法待填) |
+| `analyze` | Claude/LLM 给每镜选方法(读 `methods/catalog.json`) |
+| `edit "<指令>"` | 自然语言改分镜 |
+| `approve` | 标记 `stages.approved`(全片渲染的闸) |
+| `storyboard` | 生成 `storyboard.html` 预览 |
+| `research` / `images` / `matte` | 数据检索 / 生成配图 / 前景抠像 |
+| `fetch --scene N` / `import <file>` | 图库检索配图(Pexels/Pixabay/Unsplash)/ 导入本地素材 |
+| `tts` / `bgm` / `say` / `voice` | 配音 / 配乐 / 单句朗读 / 音色管理 |
+| `translate <lang>` | 整片翻译 |
+| `render [--only N] [--force] [--workers 2] [--stitch] [--estimate]` | 逐镜渲染 + 拼接 `final.mp4` |
+| `validate` / `review` / `cost` | 渲前结构校验+幻灯片风险 / 渲后自检 / 成本预估 |
+| `serve --projects ./projects [--port] [--token]` | 起网页分镜台 daemon |
 
-```bash
-npm run render -- --only 3
-```
+单镜快迭代:`pipeline render --only 3`;只重拼不重渲:`pipeline render --stitch`。
 
-强制重渲全部（忽略缓存）：
+## 审美:印刷工坊(可切换)
 
-```bash
-npm run render -- --force
-```
-
-## 当前可用方法（前 3 个）
-
-| id | engine | reliability |
-|---|---|---|
-| `hf-css-fade` | hyperframes (CSS) | S |
-| `hf-kinetic-text` | hyperframes (GSAP) | S |
-| `rm-d3-bar-chart` | remotion (D3) | A |
-
-完整 15 个方法定义在 `methods/catalog.json`，待实现的方法 renderer 在 `src/methods/registry.ts` 里加函数即可。
+默认 **印刷工坊**——陶土橙 `#c36c36` / 米白 `#f6f5f1` / 深褐 `#1b1612`,衬线,克制,**禁渐变 / 发光 / 投影 / AI 金光感**。另有 4 套预设(极简黑白 Swiss / 杂志编辑 / 克制深色 Nocturne / 暖手作 Claywarm),在分镜台「整体设计」里切,也可每镜覆盖。渲染时有「土味 lint」自动扫描 AI-slop 信号并告警。
 
 ## 项目结构
 
 ```
-pipeline/
-├── package.json
-├── tsconfig.json
-├── design.md             ← 项目品牌定义
-├── methods/
-│   └── catalog.json      ← 方法注册表（15 项，分 S/A/B 三档可靠性）
+vedio-make/
+├── methods/catalog.json    ← 方法注册表(16 项,分析器从这里挑;S/A/B 三档可靠性)
+├── schemas/                ← storyboard JSON Schema
+├── assets/vendor/          ← 本地化的 CDN 资产(gsap/anime/lottie/tailwind/字体,离线可渲)
 ├── src/
-│   ├── cli.ts            ← 入口（plan / storyboard / render 三个子命令）
-│   ├── types.ts          ← 共享类型
-│   ├── srt.ts            ← SRT 解析器
-│   ├── plan.ts           ← `plan` 子命令实现
-│   ├── storyboard.ts     ← `storyboard` 子命令实现
-│   ├── render.ts         ← `render` 子命令实现
-│   └── methods/
-│       └── registry.ts   ← 各方法的代码生成器
-├── input/                ← 用户放 SRT
-├── assets/               ← 用户放图片/视频/JSON 等
-└── output/               ← 运行时产物
-    ├── storyboard.json
-    ├── storyboard.html
-    ├── scenes/
-    └── final.mp4
+│   ├── cli.ts              ← CLI 入口
+│   ├── server.ts           ← 分镜台 daemon
+│   ├── render.ts           ← 渲染 + 拼接 + 混音 + 自检
+│   ├── harden.ts           ← 渲染前把外链 CDN 本地化(可复现/离线安全)
+│   ├── validate/slideshow/review/cost/decisions.ts  ← 质量闭环
+│   ├── methods/{registry,designs,lint}.ts           ← 方法渲染器 / 设计系统 / 土味 lint
+│   └── providers/          ← chat/tts/image/music/search 适配器 + 回退链
+├── public/                 ← 网页分镜台(原生 JS,无框架)
+└── projects/               ← 各项目数据(每个含 output/storyboard.json)
 ```
+
+## 开发
+
+```bash
+npm run typecheck    # tsc --noEmit(严格模式)
+npm test             # tsx --test(纯函数单测,<2s,不渲染/不起 daemon)
+npm run check        # node --check + typecheck + test(CI 跑的同一套门禁)
+```
+
+CI 见 `.github/workflows/ci.yml`。
+
+## License
+
+MIT。渲染引擎(HyperFrames / Remotion)与各 provider 有各自的许可与计费,自行确认。

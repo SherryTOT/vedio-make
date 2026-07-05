@@ -1,8 +1,11 @@
 # Vedio Make · 交接文档(给下一个会话)
 
-> 写于 2026-06-28。换窗口/新会话接手时**先读这份**。若新会话开在本目录(`~/Documents/Work/Vedio Make`),
-> 注意我之前的 memory 在 **Vedio D** 项目路径下(`~/.claude/projects/-Users-sherry-Documents-Vedio-D/memory/`),
-> 这里读不到——所以关键信息都复刻在本文件。
+> 写于 2026-06-28,更新至 2026-07-01。换窗口/新会话接手时**先读这份 + `MEMORY.md`(本项目路径下已有 5 条记忆)**。
+> 若新会话开在本目录(`~/Documents/Work/Vedio Make`),关键信息都复刻在本文件与记忆里。
+>
+> **最新进度(2026-07-01)**:三笔已提交在 `main`——`38682a9`(渲染硬化 + 质量闭环)/ `0d0f92f`(schema+成本+决策日志+回退链)/ `68b7476`(引擎决策矩阵)。见 §3/§6/§7。
+> 工作区干净(仅剩 3 个未跟踪测试项目)。**daemon 已停**(下次 `npm run serve` 起新的)。
+> **⏭ 下一步待办见 §8:全面审计 Vedio Make 自身的问题 + 改进方向(刚起头就换窗口了)。**
 
 ## 0. 这是什么
 **Vedio Make** = 用户的「字幕(SRT) → 分镜(storyboard) → 渲染 → final.mp4」AI 视频生成管线。
@@ -119,3 +122,9 @@ stitch-only 重建一致;看门狗 1.5s 内杀掉假死进程树、无孤儿;抽
 - **决策日志**:`src/decisions.ts`(append 到 `output/decisions.json`,永不抛)。`GET /api/projects/:id/decisions`。已接到 TTS provider 回退事件。
 - **provider 回退链**:`providers/registry.ts` 加 `fallbackChain()` + `withFallback()`(环安全);已接进 `tts.ts`——主 provider 失败自动降级(→ Edge 免费兜底)并写一条决策日志。链:tts voice→edge、chat minimax→deepseek→openai、image minimax→openai、search minimax↔tavily。
 - 实测:schema 抓到 width 类型错/缺 text/坏 transition;cost 免费板 $0、付费 minimax+music $0.20(0.12–0.32);withFallback 主失败→edge 兜底+落日志;daemon /cost /decisions /validate 全通;CLI cost/validate/review 用 `--in` 均通。
+
+## 8. ⏭ 待办:全面审计 Vedio Make 自身 + 改进方向
+用户要求(2026-07-01,`/model` 切到 fable-5 后):**「全面分析这个项目有什么问题、还可以怎么改进(可再对照之前发的参考项目 OpenMontage)」**。审计对象是 **Vedio Make 自己**(不是隔壁项目)。刚起头做仓库摸底就换窗口了。
+- **审计基线事实(已摸到)**:`src/` 共 53 个 ts、约 10.7k 行;大文件:`methods/registry.ts` 1788、`render.ts` 993、`server.ts` 713、`storyboard.ts` 580、`cli.ts` 543、`analyze.ts` 512、`edit.ts` 343。**没有 `tests/` 目录 —— 零自动化测试**(重要缺口,审计头号候选)。前端仅 `public/{app.js,index.html,styles.css}` 原生无框架。`package.json` **零运行时依赖**(devDeps 只有 tsx/typescript/@types/node)。既有 tsc 报错唯一一处:`providers/session-scrape/index.ts` 缺 puppeteer 类型(与渲染无关、老问题)。
+- **建议切法(ultracode 时用 Workflow 多路并行 + 对抗验证)**:① 正确性/健壮性 bug(server 鉴权/路径穿越、render 竞态、provider 错误处理);② 测试/CI 缺失(零测试是最大工程债);③ 安全(token 处理、`?token=` 泄漏、静态服务路径、密钥读取);④ 可维护性(registry.ts 1788 行是否该拆、类型 any、terra/terra2 迁移别名残留见 §4);⑤ 产品级差距对照 OpenMontage(它有而我没有、且值得要的:如更强的 reviewer skill、research→proposal→approval 阶段化——但要按「保持锋利小工具」筛,别照单全收)。
+- **纪律提醒**:改进建议要区分「真该做」vs「过度设计」;守零依赖、印刷工坊审美、只学思路不抄 AGPL。产出建议时**先给结论和优先级,别堆罗列**。
