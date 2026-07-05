@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 22 (current LTS) — the `node --test "src/**/*.test.ts"` glob in the
+          # test script needs the runner's native glob support (Node ≥ 21); on
+          # 20 it matches nothing and the job fails.
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Static gate: JS syntax + strict type-check + unit tests. No render/daemon.
+      - run: node --check public/app.js
+      - run: npm run typecheck
+      - run: npm test

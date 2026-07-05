@@ -4,6 +4,11 @@
   "license": "MIT",
   "type": "module",
   "description": "Subtitle → method selection → storyboard → scene renders → final video pipeline. Agent-in-the-loop (Claude picks methods, CLI does mechanical work).",
+  "keywords": ["video", "srt", "storyboard", "ffmpeg", "hyperframes", "remotion", "tts", "ai-video", "subtitles"],
+  "homepage": "https://github.com/SherryTOT/vedio-make#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/SherryTOT/vedio-make.git" },
+  "bugs": { "url": "https://github.com/SherryTOT/vedio-make/issues" },
+  "author": "SherryTOT",
   "bin": {
     "pipeline": "./src/cli.ts"
   },
@@ -13,6 +18,9 @@
     "render": "tsx src/cli.ts render",
     "serve": "tsx src/cli.ts serve --projects ./projects",
     "board": "tsx src/cli.ts serve --projects ./projects",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit -p .",
+    "check": "node --check public/app.js && npm run typecheck && npm test",
     "clean": "node -e \"const fs=require('fs'),p='output';if(fs.existsSync(p))for(const f of fs.readdirSync(p))fs.rmSync(require('path').join(p,f),{recursive:true,force:true})\""
   },
   "engines": {
