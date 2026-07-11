@@ -31,6 +31,7 @@ import { hfVersusPanel } from "./impl/hf-versus-panel.ts";
 import { rmD3LineDraw } from "./impl/rm-d3-line-draw.ts";
 import { rmD3BarRace } from "./impl/rm-d3-bar-race.ts";
 import { hfWordPunch } from "./impl/hf-word-punch.ts";
+import { hfScribbleAnnotate } from "./impl/hf-scribble-annotate.ts";
 
 export const METHOD_RENDERERS: Record<string, MethodRenderer> = {
   "hf-css-fade": hfCssFade,
@@ -54,4 +55,5 @@ export const METHOD_RENDERERS: Record<string, MethodRenderer> = {
   "rm-d3-line-draw": rmD3LineDraw,
   "rm-d3-bar-race": rmD3BarRace,
   "hf-word-punch": hfWordPunch,
+  "hf-scribble-annotate": hfScribbleAnnotate,
 };

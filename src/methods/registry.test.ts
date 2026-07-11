@@ -220,3 +220,24 @@ test("hf-word-punch: long line scales down to keep the safe area", () => {
   );
   assert.ok(size(out.html, 1) < size(out.html, 0), "longer line uses a smaller font");
 });
+
+// ── hf-scribble-annotate (P1 §三.6) ──
+
+test("hf-scribble-annotate: flow nodes + hand-drawn arrows draw stroke-by-stroke", () => {
+  const dsn = resolveDesign(undefined);
+  const out: any = METHOD_RENDERERS["hf-scribble-annotate"](mkScene({ text: "用户 → 网关 → 模型" }), ctx("inkwork"));
+  assert.equal(out.engine, "hyperframes");
+  assert.equal((out.html.match(/class="node"/g) || []).length, 3, "3 nodes");
+  assert.equal((out.html.match(/class="arrow"/g) || []).length, 2, "2 arrows");
+  assert.equal((out.html.match(/class="ring"/g) || []).length, 1, "emphasis ring on last node");
+  assert.ok(out.html.includes("strokeDashoffset: 1") && out.html.includes("strokeDashoffset: 0"), "逐笔 stroke-draw");
+  assert.ok(out.html.includes(`stroke="${dsn.ink}"`) && out.html.includes(`stroke="${dsn.accent}"`), "arrows ink, ring accent");
+  assert.ok(!/Math\.random|Date\.now/.test(out.html), "deterministic wobble (seek-safe)");
+});
+
+test("hf-scribble-annotate: caps drawn strokes ≤3 (4 nodes → 3 arrows, no ring)", () => {
+  const out: any = METHOD_RENDERERS["hf-scribble-annotate"](mkScene({ text: "A -> B -> C -> D" }), ctx("swiss"));
+  assert.equal((out.html.match(/class="node"/g) || []).length, 4);
+  assert.equal((out.html.match(/class="arrow"/g) || []).length, 3);
+  assert.equal((out.html.match(/class="ring"/g) || []).length, 0, "no ring at 4 nodes (keeps drawn ≤3)");
+});

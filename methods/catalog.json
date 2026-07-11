@@ -457,6 +457,30 @@
       "implemented": true
     },
     {
+      "id": "hf-scribble-annotate",
+      "label": "Scribble Annotate (hand-drawn arrows / circle)",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "annotation",
+        "arrow",
+        "flow",
+        "relationship",
+        "diagram",
+        "emphasis",
+        "hand-drawn"
+      ],
+      "whenToUse": "Relationships / flow / how something moves between parties (钱怎么流). Nodes connect with hand-drawn wobbly arrows that draw stroke-by-stroke; the emphasised (last) node gets a hand-drawn ring. scene.text is a flow: nodes split by → / -> / newline (e.g. '用户 → 网关 → 模型'). 2–4 nodes, ≤3 drawn strokes.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
       "id": "hf-mountain-reveal",
       "label": "Mountain Occlusion Title Reveal",
       "engine": "hyperframes",
