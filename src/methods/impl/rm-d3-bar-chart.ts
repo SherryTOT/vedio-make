@@ -27,15 +27,18 @@ export const rmD3BarChart: MethodRenderer = (scene, ctx) => {
       title: scene.text,
       data: items,
       durationSec: scene.durationSec,
+      // spotlight param slot (MOTION §三末节): a bar index or label to emphasise —
+      // the narrated bar染 accent, the rest drop to 35% opacity. null = all lit.
+      spotlight: (scene.data as any)?.spotlight ?? null,
     },
     tsx: `import React from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Easing, spring } from "remotion";
 import { scaleLinear, scaleBand, max } from "d3";
 
 type Item = { label: string; value: number };
-type Props = { title: string; data: Item[]; durationSec: number };
+type Props = { title: string; data: Item[]; durationSec: number; spotlight: number | string | null };
 
-export const Scene: React.FC<Props> = ({ title, data }) => {
+export const Scene: React.FC<Props> = ({ title, data, spotlight }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
 
@@ -73,13 +76,18 @@ export const Scene: React.FC<Props> = ({ title, data }) => {
             const barH = (chartH - y(d.value)) * progress;
             const barY = chartH - barH;
             const landScale = spring({ frame: frame - (startFrame + 24), fps, config: { damping: 12, stiffness: 200 }, durationInFrames: 18 });
+            const anySpot = spotlight !== null && spotlight !== undefined;
+            const isSpot = anySpot && (spotlight === i || spotlight === d.label);
+            const barFill = isSpot ? "${ctx.design.accent}"
+              : anySpot ? "${ctx.design.accent2}"
+              : (d.value === yMax ? "${ctx.design.accent}" : "${ctx.design.accent2}");
             return (
-              <g key={d.label} transform={\`translate(\${x(d.label)},0)\`}>
+              <g key={d.label} transform={\`translate(\${x(d.label)},0)\`} opacity={anySpot && !isSpot ? 0.35 : 1}>
                 <rect x={0} y={barY} width={x.bandwidth()} height={barH} rx={4}
-                  fill={d.value === yMax ? "${ctx.design.accent}" : "${ctx.design.accent2}"}
+                  fill={barFill}
                   style={{ transformOrigin: \`50% \${chartH}px\`, transform: \`scaleY(\${landScale < 1 ? 1 + (1 - landScale) * 0.05 : 1})\` }}
                 />
-                <text x={x.bandwidth() / 2} y={barY - 14} textAnchor="middle" fill={d.value === yMax ? "${ctx.design.accent}" : "${ctx.design.ink}"} fontSize="36" fontWeight="500" opacity={progress} fontFamily="-apple-system, ui-monospace, monospace">
+                <text x={x.bandwidth() / 2} y={barY - 14} textAnchor="middle" fill={isSpot || d.value === yMax ? "${ctx.design.accent}" : "${ctx.design.ink}"} fontSize="36" fontWeight="500" opacity={progress} fontFamily="ui-monospace, 'SF Mono', Menlo, monospace" fontVariantNumeric="tabular-nums">
                   {(d.value * progress).toFixed(1)}
                 </text>
                 <text x={x.bandwidth() / 2} y={chartH + 40} textAnchor="middle" fill="${ctx.design.muted}" fontSize="22" letterSpacing="0.12em" opacity={progress}>

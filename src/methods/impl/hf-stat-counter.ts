@@ -75,7 +75,7 @@ export const hfStatCounter: MethodRenderer = (scene, ctx) => {
     tl.fromTo(".numwrap", { opacity: 0, scale: 0.8, y: 24 },
       { opacity: 1, scale: 1, y: 0, duration: Math.min(0.7, T*0.5), ease: "back.out(1.6)" }, 0.3);
     ${countable ? `var st = { v: 0 };
-    tl.to(st, { v: ${target}, duration: Math.min(1.8, T*0.7), ease: "power2.out",
+    tl.to(st, { v: ${target}, duration: Math.min(1.8, T*0.7), ease: "power4.out",
       onUpdate: function(){ numEl.textContent = fmt(st.v); } }, 0.35);` : ``}
     tl.fromTo(".label", { opacity: 0, y: 20 },
       { opacity: 1, y: 0, duration: Math.min(0.55, T*0.45), ease: "power3.out" }, 0.6);
