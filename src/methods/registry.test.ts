@@ -142,3 +142,25 @@ test("hf-mega-counter: no emoji glyphs on frame (MOTION 红线 4 — arrow is in
   assert.ok(out.html.includes("<svg"), "delta arrow is a vector SVG");
   assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(out.html), "no emoji in the composition");
 });
+
+// ── hf-versus-panel (P1 §三.4) ──
+
+test("hf-versus-panel: A-vs-B table, winner染 accent + slides from opposite edges", () => {
+  const dsn = resolveDesign(undefined);
+  const out: any = METHOD_RENDERERS["hf-versus-panel"](
+    mkScene({ text: "AI Switch|竞品 X\n月费|¥0*|¥99\n模型|全平台*|锁定" }), ctx("inkwork"),
+  );
+  assert.equal(out.engine, "hyperframes");
+  assert.equal((out.html.match(/class="prow"/g) || []).length, 2, "2 param rows parsed");
+  assert.ok(out.html.includes(`.pval.win { color: ${dsn.accent}`), "winner cell染 accent");
+  assert.ok(out.html.includes(`.col-title.hero { color: ${dsn.accent}`), "hero title染 accent");
+  assert.ok(out.html.includes("x: -70") && out.html.includes("x: 70"), "两侧对向滑入");
+});
+
+test("hf-versus-panel: supports 3 columns", () => {
+  const out: any = METHOD_RENDERERS["hf-versus-panel"](
+    mkScene({ text: "开源|Pro|旗舰\n价格|¥0*|¥39|¥99\n并发|1|4*|不限" }), ctx("swiss"),
+  );
+  assert.equal((out.html.match(/class="col-title/g) || []).length, 3, "3 column titles");
+  assert.ok(out.html.includes("repeat(3, 1fr)"), "3-column grid");
+});

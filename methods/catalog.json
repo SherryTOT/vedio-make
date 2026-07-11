@@ -333,6 +333,29 @@
       "implemented": true
     },
     {
+      "id": "hf-versus-panel",
+      "label": "Versus Panel (A vs B parameter table)",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "comparison",
+        "versus",
+        "table",
+        "parameters",
+        "cards",
+        "vs"
+      ],
+      "whenToUse": "A vs B (up to 3 columns) parameter pull-table. Sides slide in from opposite edges; rows light up one by one; the winning cell染 accent, the losing column dims. scene.text is newline-separated: line 1 = column titles 'AI Switch|竞品 X', then rows '月费|¥0*|¥99' (label|val per column; trailing * = row winner).",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "rm-framer-card-stack",
+      "implemented": true
+    },
+    {
       "id": "hf-poster-hero",
       "label": "Cinematic Poster Hero (image + hero text)",
       "engine": "hyperframes",
