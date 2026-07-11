@@ -320,6 +320,29 @@
       "implemented": true
     },
     {
+      "id": "hf-word-punch",
+      "label": "Word Punch (金句 keyword hit)",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "text",
+        "emphasis",
+        "punchline",
+        "keyword",
+        "金句",
+        "kinetic"
+      ],
+      "whenToUse": "A punchline / conclusion / turning-point phrase that should HIT. An accent block sweeps in (scaleX), then the text lands (scale 1.3→1). scene.text = the line(s); newlines stack staggered punches. Keep lines short (金句, ≤18 CJK chars). Use sparingly — ≤2 per 15s or it reads cheap.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-chapter-card",
+      "implemented": true
+    },
+    {
       "id": "hf-chapter-card",
       "label": "Chapter Title Card",
       "engine": "hyperframes",

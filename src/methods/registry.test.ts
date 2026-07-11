@@ -199,3 +199,24 @@ test("rm-d3-bar-race: remotion race, ≤8 bars, power2.inOut reorder, leader/ex-
   assert.ok(out.tsx.includes(dsn.accent) && out.tsx.includes(dsn.accent2), "new #1染 accent, ex-#1 accent2");
   assert.ok(!/fontFamily: ""/.test(out.tsx), "font token re-quoted");
 });
+
+// ── hf-word-punch (P1 §三.7) ──
+
+test("hf-word-punch: block scaleX sweeps then text lands, accent block / paper text", () => {
+  const dsn = resolveDesign(undefined);
+  const out: any = METHOD_RENDERERS["hf-word-punch"](mkScene({ text: "金句一\n金句二" }), ctx("inkwork"));
+  assert.equal(out.engine, "hyperframes");
+  assert.equal((out.html.match(/class="block"/g) || []).length, 2, "two stacked punches");
+  assert.ok(out.html.includes("scaleX: 0") && out.html.includes('ease: "power3.out"'), "block scaleX 0→1 power3.out");
+  assert.ok(out.html.includes("scale: 1.3"), "text lands scale 1.3→1");
+  assert.ok(out.html.includes(`background: ${dsn.accent}`) && out.html.includes(`color: ${dsn.paper}`), "accent block, paper text");
+});
+
+test("hf-word-punch: long line scales down to keep the safe area", () => {
+  const size = (h: string, i: number) =>
+    parseInt(new RegExp(`\\.punch\\[data-i="${i}"\\] \\.txt \\{ font-size: (\\d+)px`).exec(h)![1], 10);
+  const out: any = METHOD_RENDERERS["hf-word-punch"](
+    mkScene({ text: "短\n这是一句明显更长的金句用来测试自适应缩放不出血" }), ctx("inkwork"),
+  );
+  assert.ok(size(out.html, 1) < size(out.html, 0), "longer line uses a smaller font");
+});
