@@ -308,6 +308,31 @@
       "implemented": true
     },
     {
+      "id": "hf-mega-counter",
+      "label": "Mega Counter (full-screen hero number)",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "number",
+        "stat",
+        "hero",
+        "bignumber",
+        "percent",
+        "price",
+        "score",
+        "kinetic"
+      ],
+      "whenToUse": "One core number owning the whole frame (score / price / percentage). Number rolls 0→N in 1.2s, the unit fades in late, and an optional up/down delta arrow pops last in ok/alert. scene.text='286|%|香港隔夜拆借利率|1997.10|+18%' (value|suffix|label|sublabel|delta; value may carry $/¥ prefix). Prefer over hf-stat-counter when the number IS the shot.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [],
+      "fallback": "hf-stat-counter",
+      "implemented": true
+    },
+    {
       "id": "hf-poster-hero",
       "label": "Cinematic Poster Hero (image + hero text)",
       "engine": "hyperframes",

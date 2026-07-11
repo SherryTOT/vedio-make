@@ -26,6 +26,7 @@ import { hfMountainReveal } from "./impl/hf-mountain-reveal.ts";
 import { hfLineReveal } from "./impl/hf-line-reveal.ts";
 import { hfChapterCard } from "./impl/hf-chapter-card.ts";
 import { hfStatCounter } from "./impl/hf-stat-counter.ts";
+import { hfMegaCounter } from "./impl/hf-mega-counter.ts";
 
 export const METHOD_RENDERERS: Record<string, MethodRenderer> = {
   "hf-css-fade": hfCssFade,
@@ -44,4 +45,5 @@ export const METHOD_RENDERERS: Record<string, MethodRenderer> = {
   "hf-line-reveal": hfLineReveal,
   "hf-chapter-card": hfChapterCard,
   "hf-stat-counter": hfStatCounter,
+  "hf-mega-counter": hfMegaCounter,
 };

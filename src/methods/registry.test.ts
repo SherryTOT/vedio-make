@@ -103,3 +103,42 @@ test("catalog and renderer registry are in sync (no drift)", () => {
   const catalog = JSON.parse(fs.readFileSync(path.join(here, "..", "..", "methods", "catalog.json"), "utf8"));
   assert.deepEqual(reconcileCatalog(catalog.methods.map((m: any) => m.id)), []);
 });
+
+// ── hf-mega-counter (P1 §三.3) ──
+
+test("hf-mega-counter: rolls to value, tabular-nums + power4.out, tokens not hardcoded", () => {
+  const d = resolveDesign(undefined);
+  const out: any = METHOD_RENDERERS["hf-mega-counter"](
+    mkScene({ text: "286|%|香港隔夜拆借利率|1997.10|+18%" }), ctx("inkwork"),
+  );
+  assert.equal(out.engine, "hyperframes");
+  assert.ok(out.html.includes('data-duration="3"'), "duration wired");
+  assert.ok(out.html.includes("tabular-nums"), "MOTION 红线 5: tabular-nums");
+  assert.ok(out.html.includes('ease: "power4.out"'), "spec: count rolls power4.out");
+  assert.ok(out.html.includes(d.ink) && out.html.includes(d.accent), "design tokens applied");
+  assert.ok(out.html.includes("v: 286"), "target value drives the count-up");
+});
+
+test("hf-mega-counter: number is ≥22% height ideal but never overflows the safe area", () => {
+  const size = (h: string) => parseInt(/\.num \{ font-size: (\d+)px/.exec(h)![1], 10);
+  const short: any = METHOD_RENDERERS["hf-mega-counter"](mkScene({ text: "9|%" }), ctx("inkwork"));
+  const long: any = METHOD_RENDERERS["hf-mega-counter"](mkScene({ text: "$1,299,000|起" }), ctx("inkwork"));
+  assert.equal(size(short.html), Math.round(1920 * 0.22), "short number hits the 22% ideal");
+  assert.ok(size(long.html) < size(short.html), "long number scales down to fit 左右≥120px");
+});
+
+test("hf-mega-counter: delta arrow uses ok (up) / alert (down), absent when omitted", () => {
+  const d = resolveDesign(undefined);
+  const up: any = METHOD_RENDERERS["hf-mega-counter"](mkScene({ text: "10|%|x|y|+5%" }), ctx("inkwork"));
+  assert.ok(up.html.includes('class="delta"') && up.html.includes(d.ok), "up delta rides ok colour");
+  const down: any = METHOD_RENDERERS["hf-mega-counter"](mkScene({ text: "10|%|x|y|-5%" }), ctx("inkwork"));
+  assert.ok(down.html.includes(d.alert), "down delta rides alert colour");
+  const none: any = METHOD_RENDERERS["hf-mega-counter"](mkScene({ text: "10|%|x|y" }), ctx("inkwork"));
+  assert.ok(!none.html.includes('class="delta"'), "no delta chip without a delta field");
+});
+
+test("hf-mega-counter: no emoji glyphs on frame (MOTION 红线 4 — arrow is inline SVG)", () => {
+  const out: any = METHOD_RENDERERS["hf-mega-counter"](mkScene({ text: "10|%|x|y|+5%" }), ctx("inkwork"));
+  assert.ok(out.html.includes("<svg"), "delta arrow is a vector SVG");
+  assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(out.html), "no emoji in the composition");
+});

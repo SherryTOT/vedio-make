@@ -71,6 +71,10 @@ export interface DesignTokens {
   paper: string; pw: string;
   ink: string; ink2: string; muted: string;
   accent: string; accent2: string;
+  /** Status colours for data emphasis (up/positive vs down/negative). Restrained,
+   *  on-brand — NOT neon dashboard green/red. Used by mega-counter's delta arrow
+   *  and any 数据强调 that needs a good/bad distinction (MOTION.md §三/§四). */
+  ok: string; alert: string;
   line: string;
   serif: string; sans: string;
   display: "serif" | "sans";
