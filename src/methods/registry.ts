@@ -29,6 +29,7 @@ import { hfStatCounter } from "./impl/hf-stat-counter.ts";
 import { hfMegaCounter } from "./impl/hf-mega-counter.ts";
 import { hfVersusPanel } from "./impl/hf-versus-panel.ts";
 import { rmD3LineDraw } from "./impl/rm-d3-line-draw.ts";
+import { rmD3BarRace } from "./impl/rm-d3-bar-race.ts";
 
 export const METHOD_RENDERERS: Record<string, MethodRenderer> = {
   "hf-css-fade": hfCssFade,
@@ -50,4 +51,5 @@ export const METHOD_RENDERERS: Record<string, MethodRenderer> = {
   "hf-mega-counter": hfMegaCounter,
   "hf-versus-panel": hfVersusPanel,
   "rm-d3-line-draw": rmD3LineDraw,
+  "rm-d3-bar-race": rmD3BarRace,
 };

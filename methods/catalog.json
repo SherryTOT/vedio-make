@@ -106,6 +106,33 @@
       "implemented": true
     },
     {
+      "id": "rm-d3-bar-race",
+      "label": "D3 Bar Race (Remotion)",
+      "engine": "remotion",
+      "skill": "data-visualization",
+      "library": "d3",
+      "reliability": "A",
+      "tags": [
+        "data",
+        "ranking",
+        "race",
+        "bars",
+        "comparison",
+        "overtake",
+        "share"
+      ],
+      "whenToUse": "Multi-subject ranking that changes over time (leaderboard / market-share race). Bars reorder with a 0.8s power2.inOut shift as values roll; the new #1染 accent, the displaced one falls to accent2. Needs scene.data.years (steps) + scene.data.series with a value per step. ≤8 bars. Prefer over rm-d3-bar-chart when the RANK CHANGE is the story.",
+      "inputs": [
+        "text",
+        "data:array"
+      ],
+      "assetNeeds": [
+        "data:json"
+      ],
+      "fallback": "rm-d3-bar-chart",
+      "implemented": true
+    },
+    {
       "id": "rm-d3-bar-chart",
       "label": "D3 Bar Chart (Remotion)",
       "engine": "remotion",

@@ -186,3 +186,16 @@ test("rm-d3-line-draw: font token injected without breaking the tsx string", () 
   assert.ok(!/fontFamily: ""/.test(out.tsx), "no empty-then-bareword font (the bug)");
   assert.ok(/fontFamily: "'[^"]+'/.test(out.tsx), "font names re-quoted to single quotes");
 });
+
+// ── rm-d3-bar-race (P1 §三.1) ──
+
+test("rm-d3-bar-race: remotion race, ≤8 bars, power2.inOut reorder, leader/ex-leader colours", () => {
+  const dsn = resolveDesign(undefined);
+  const many = { years: ["1", "2"], series: Array.from({ length: 12 }, (_, i) => ({ name: "S" + i, values: [i, 12 - i] })) };
+  const out: any = METHOD_RENDERERS["rm-d3-bar-race"](mkScene({ text: "race", data: many } as any), ctx("inkwork"));
+  assert.equal(out.engine, "remotion");
+  assert.equal(out.props.data.series.length, 8, "capped at ≤8 bars");
+  assert.ok(out.tsx.includes("Easing.inOut(Easing.quad)"), "y-shift is power2.inOut");
+  assert.ok(out.tsx.includes(dsn.accent) && out.tsx.includes(dsn.accent2), "new #1染 accent, ex-#1 accent2");
+  assert.ok(!/fontFamily: ""/.test(out.tsx), "font token re-quoted");
+});
