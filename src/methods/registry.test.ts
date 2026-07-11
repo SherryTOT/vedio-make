@@ -164,3 +164,25 @@ test("hf-versus-panel: supports 3 columns", () => {
   assert.equal((out.html.match(/class="col-title/g) || []).length, 3, "3 column titles");
   assert.ok(out.html.includes("repeat(3, 1fr)"), "3-column grid");
 });
+
+// ── rm-d3-line-draw (P1 §三.2) ──
+
+test("rm-d3-line-draw: remotion trend that draws itself, primary full / others dim", () => {
+  const out: any = METHOD_RENDERERS["rm-d3-line-draw"](
+    mkScene({ text: "趋势", data: { years: ["1", "2", "3"], series: [{ name: "a", values: [1, 3, 2] }, { name: "b", values: [2, 2, 2] }] } } as any),
+    ctx("inkwork"),
+  );
+  assert.equal(out.engine, "remotion");
+  assert.equal(out.compId, "Scene");
+  assert.ok(out.tsx.includes("strokeDashoffset={1 - progress}"), "stroke-dashoffset draw");
+  assert.ok(out.tsx.includes("Easing.poly(4)"), "power4.out draw curve");
+  assert.ok(out.tsx.includes("opacity={primary ? 1 : 0.35}"), "primary full / others 35%");
+});
+
+test("rm-d3-line-draw: font token injected without breaking the tsx string", () => {
+  // Regression: ctx.design.sans is double-quoted ("Noto Sans SC", …); injecting it
+  // raw into fontFamily: "…" produces fontFamily: ""Noto… — an esbuild parse error.
+  const out: any = METHOD_RENDERERS["rm-d3-line-draw"](mkScene({ text: "x" }), ctx("inkwork"));
+  assert.ok(!/fontFamily: ""/.test(out.tsx), "no empty-then-bareword font (the bug)");
+  assert.ok(/fontFamily: "'[^"]+'/.test(out.tsx), "font names re-quoted to single quotes");
+});

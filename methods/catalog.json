@@ -131,6 +131,32 @@
       "implemented": true
     },
     {
+      "id": "rm-d3-line-draw",
+      "label": "D3 Line Draw / Trend Scan (Remotion)",
+      "engine": "remotion",
+      "skill": "data-visualization",
+      "library": "d3",
+      "reliability": "A",
+      "tags": [
+        "data",
+        "trend",
+        "timeseries",
+        "line",
+        "growth",
+        "draw"
+      ],
+      "whenToUse": "Trend narration (growth / decline / change over time) where the curve should DRAW itself. stroke-dashoffset draws in ~1.5s with a cursor dot on the tip; turning points pop as the cursor reaches them; extra series dim to 35%. Needs scene.data.years + scene.data.series. Prefer over rm-d3-line-trend when the drawing motion carries the story.",
+      "inputs": [
+        "text",
+        "data:timeseries"
+      ],
+      "assetNeeds": [
+        "data:json"
+      ],
+      "fallback": "rm-d3-line-trend",
+      "implemented": true
+    },
+    {
       "id": "rm-d3-line-trend",
       "label": "D3 Line / Trend Chart (Remotion)",
       "engine": "remotion",
