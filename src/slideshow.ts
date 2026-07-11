@@ -72,6 +72,7 @@ export function scoreSlideshowRisk(sb: Storyboard, projectRoot: string): RiskRep
   }
 
   const dims: Record<string, RiskDimension> = {};
+  const textSet = textLedMethods(projectRoot);
 
   // 1) method_repetition — how dominant is the single most-used method.
   {
@@ -88,7 +89,6 @@ export function scoreSlideshowRisk(sb: Storyboard, projectRoot: string): RiskRep
 
   // 2) text_overreliance — fraction of the board that is pure typographic cards.
   {
-    const textSet = textLedMethods(projectRoot);
     const textLed = scenes.filter((s) => isTextLed(s, textSet)).length;
     const frac = textLed / n;
     dims.text_overreliance = {
@@ -126,6 +126,21 @@ export function scoreSlideshowRisk(sb: Storyboard, projectRoot: string): RiskRep
       reason: metronomic
         ? `镜头时长几乎一致(变异系数 ${cv.toFixed(2)})且方法种类少(${distinctMethods}/${n}) — 节奏偏机械`
         : `节奏尚可(时长变异 ${cv.toFixed(2)},方法 ${distinctMethods}/${n} 种)`,
+    };
+  }
+
+  // 5) long_static_hold — MOTION §二: a scene held >6s with no internal visual
+  //    event (static text-led card, no camera motion) reads as dead air. Every
+  //    2.5–4s wants an event; >6s静默 is a violation. Advisory hint only.
+  {
+    const longStatic = scenes.filter((s) =>
+      s.durationSec > 6 && isTextLed(s, textSet) && (!s.motion || s.motion.kind === "still"));
+    const frac = longStatic.length / n;
+    dims.long_static_hold = {
+      score: ramp(frac, 0.1, 0.6), // 10% → 0, 60% → 5
+      reason: longStatic.length
+        ? `${longStatic.length} 个静态文字镜 >6s（镜 ${longStatic.map((s) => s.index).join("/")}）— MOTION §二 每 2.5–4s 需一个视觉事件,拆镜或加进场/强调/镜头微动`
+        : `无 >6s 静默镜头`,
     };
   }
 

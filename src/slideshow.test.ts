@@ -46,6 +46,25 @@ test("uniform durations but varied methods is NOT flagged as monotonous (inversi
   assert.ok(pacing.score <= 1.5, `varied methods should score low pacing risk, got ${pacing.score}`);
 });
 
+test("long static holds >6s are flagged (MOTION §二 视觉事件密度 dimension)", () => {
+  // Two 8s static text-led cards with no motion → the >6s dimension should fire.
+  const held = mkStoryboard({
+    scenes: [
+      mkScene({ index: 1, startSec: 0, endSec: 8, durationSec: 8, method: "hf-css-fade", reasoning: "x" }),
+      mkScene({ index: 2, startSec: 8, endSec: 16, durationSec: 8, method: "hf-css-fade", reasoning: "y" }),
+      mkScene({ index: 3, startSec: 16, endSec: 19, durationSec: 3, method: "hf-kinetic-text", reasoning: "z" }),
+    ],
+  });
+  const dim = scoreSlideshowRisk(held, "/tmp/x").dimensions.long_static_hold;
+  assert.ok(dim, "long_static_hold dimension exists");
+  assert.ok(dim.score > 0, "held static cards raise the >6s risk");
+  // A board with no long static holds scores 0 on this dimension.
+  const brisk = mkStoryboard({
+    scenes: [1, 2, 3, 4].map((i) => mkScene({ index: i, startSec: (i - 1) * 3, endSec: i * 3, durationSec: 3, method: "hf-kinetic-text", reasoning: "ok" })),
+  });
+  assert.equal(scoreSlideshowRisk(brisk, "/tmp/x").dimensions.long_static_hold.score, 0);
+});
+
 test("average always lands in [0, 5]", () => {
   const r = scoreSlideshowRisk(mkStoryboard({ scenes: [1, 2, 3].map((i) => mkScene({ index: i, startSec: i, endSec: i + 1, durationSec: 1 })) }), "/tmp/x");
   assert.ok(r.average >= 0 && r.average <= 5);

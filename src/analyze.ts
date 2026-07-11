@@ -17,7 +17,17 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getChat } from "./providers/registry.ts";
+
+/** The director's manual (DIRECTION §一 台词→方法映射表 + §二 风格档案) — the codex
+ *  that tells the analyzer WHICH method to pick. Read once from the repo docs/. */
+const DIRECTION_MD: string = (() => {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    return fs.readFileSync(path.join(here, "..", "docs", "DIRECTION.md"), "utf8");
+  } catch { return ""; }
+})();
 import { METHOD_RENDERERS } from "./methods/registry.ts";
 import type { ChangeEntry, MethodDef, Storyboard } from "./types.ts";
 
@@ -121,7 +131,7 @@ ${g.note ? `\n${g.note}` : ""}
 `;
 }
 
-function buildSystemPrompt(catalog: { methods: MethodDef[]; engineGuidance?: EngineGuidance }, designMd: string): string {
+function buildSystemPrompt(catalog: { methods: MethodDef[]; engineGuidance?: EngineGuidance }, designMd: string, directionMd: string): string {
   // Compact method list: just the fields the analyzer needs to decide.
   const methodSummary = catalog.methods
     .map(
@@ -139,9 +149,15 @@ ${engineGuidanceBlock(catalog.engineGuidance)}
 METHOD CATALOG (pick "method" from these ids, must match verbatim):
 ═══════════════════════════════════════════════════════════════════
 ${methodSummary}
-
+${directionMd ? `
 ═══════════════════════════════════════════════════════════════════
-DESIGN GUIDANCE (project brand, mood, palette — for context only):
+DIRECTOR'S MAPPING — the authoritative method-selection guide.
+DIRECTION §一 台词→方法映射表 + §二 风格档案. Prefer this over generic heuristics.
+═══════════════════════════════════════════════════════════════════
+${directionMd}
+` : ""}
+═══════════════════════════════════════════════════════════════════
+NARRATIVE TONALITY (project 调性档 — pacing / voice / audience / preset, for context):
 ═══════════════════════════════════════════════════════════════════
 ${designMd}
 
@@ -152,14 +168,21 @@ RULES (must follow):
 2. "fallback" must reference a method with reliability=S (safe fallback when the primary is risky or assets missing). Default "hf-css-fade".
 3. Prefer S-tier methods. Use A/B-tier only when its strengths clearly match the scene.
 4. Pick variety across the full scene set — avoid using the same method on 8+ consecutive scenes. Hero/section/data/list/comparison/CTA scenes each have natural fits.
-5. Heuristics:
-   - Short hero/hook (≤10 chars, opening/closing/section titles) → hf-kinetic-text
-   - Comma-delimited list of 3+ named items → hf-anime-scatter
-   - Numeric comparison of 3-10 items → rm-d3-bar-chart
-   - Time series / trend over years → rm-d3-line-trend
-   - Highlight a single phrase / fact → hf-waapi-marker
-   - 2-5 named alternatives or product cards → rm-framer-card-stack
-   - Plain narration / connective tissue → hf-css-fade
+5. Method selection — FOLLOW the DIRECTOR'S MAPPING (DIRECTION §一) above. Signal → 首选 | 备选:
+   - 单个核心数值 / 百分比 / 金额 / 分数 → hf-mega-counter | hf-stat-counter
+   - 多主体排名 / 份额随时间变化 → rm-d3-bar-race | rm-d3-bar-chart
+   - 趋势 / 增长 / 下跌 / 随时间变化 → rm-d3-line-draw | rm-d3-line-trend
+   - A vs B 对比 / 参数拉表 → hf-versus-panel | rm-framer-card-stack
+   - 人物 / 公司 / 产品实体登场 → hf-sticker-pop (needs matte sticker; else hf-poster-hero)
+   - 关系 / 流程 / 钱怎么流 → hf-scribble-annotate
+   - 金句 / 结论 / 转折词 → hf-word-punch | hf-chapter-card
+   - 章节切换 → hf-chapter-card | hf-line-reveal
+   - 短 hero / hook 标题 (≤10 chars) → hf-kinetic-text
+   - 逗号分隔的 3+ 名词列表 → hf-anime-scatter
+   - 强调长句中的某个词/事实 → hf-waapi-marker
+   - 无明确信号的过渡句 → hf-css-fade (兜底;连续 2 镜兜底会触发单调警告)
+   Also honor DIRECTION §二 style archives — A 极客湾式数据 / B 小Lin说式叙事 / C 印刷工坊经典 —
+   and pick methods from the archive matching that segment. Keep全片 method 重复率 ≤40%.
 
 6. ALSO emit "motion" and "focus" for each scene to drive non-linear camera and dimming overlays. Rules:
    • motion.kind: kenburns | dolly | pan | still
@@ -391,7 +414,7 @@ export async function runAnalyze(opts: AnalyzeOpts): Promise<Storyboard> {
   // visible instead of silently unpickable (or a render-time crash).
   for (const w of reconcileCatalog(catalog.methods.map((m) => m.id))) console.warn(`[analyze] ⚠ catalog 漂移:${w}`);
 
-  const system = buildSystemPrompt(catalog, designMd);
+  const system = buildSystemPrompt(catalog, designMd, DIRECTION_MD);
   const user = buildUserPrompt(sb, assets);
 
   const chatClient = getChat(opts.provider);

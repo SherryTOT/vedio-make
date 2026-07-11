@@ -14,10 +14,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { runCapture } from "./proc.ts";
 import { loadPromise, diffPromise } from "./promise.ts";
+import { METHOD_RENDERERS } from "./methods/registry.ts";
+import { lintSource } from "./methods/lint.ts";
+import { resolveSceneDesign } from "./methods/designs.ts";
 import type { Storyboard } from "./types.ts";
 
 export interface QaFrame { tSec: number; path: string; yavg: number | null; black: boolean; flat: boolean }
 export interface QaFinding { level: "error" | "warn" | "info"; msg: string }
+/** One row of the DIRECTION §四 渲染后审美验收 checklist. `manual` = can't be auto-judged. */
+export interface ChecklistItem { n: number; label: string; status: "pass" | "warn" | "fail" | "manual"; detail: string }
 export interface QaReport {
   status: "pass" | "warn" | "fail";
   generatedAt: string;
@@ -36,6 +41,8 @@ export interface QaReport {
   frames: QaFrame[];
   audio: { expected: boolean; present: boolean; meanDb: number | null; maxDb: number | null; silent: boolean; clipping: boolean };
   findings: QaFinding[];
+  /** DIRECTION §四 10 条审美验收自查(auto where possible, else manual). */
+  checklist: ChecklistItem[];
 }
 
 const FF_TIMEOUT = 60_000;
@@ -93,6 +100,7 @@ export async function reviewFinal(
     frames: [],
     audio: { expected: false, present: false, meanDb: null, maxDb: null, silent: false, clipping: false },
     findings,
+    checklist: [],
   };
 
   if (!fs.existsSync(final)) {
@@ -207,13 +215,105 @@ export async function reviewFinal(
     for (const msg of diffPromise(promise, sb)) findings.push({ level: "warn", msg: `承诺契约:${msg}` });
   }
 
+  // ─ DIRECTION §四 审美验收自查表 (auto where possible, else 人工栏) ─
+  report.checklist = buildChecklist(sb, report, projectRoot);
+  const lintItem = report.checklist.find((c) => c.n === 6);
+  if (lintItem?.status === "fail") findings.push({ level: "error", msg: `§四.6 土味 lint 未过:${lintItem.detail}` });
+  const clWarn = report.checklist.filter((c) => c.status === "warn").length;
+  const clPass = report.checklist.filter((c) => c.status === "pass").length;
+  const clManual = report.checklist.filter((c) => c.status === "manual").length;
+  if (clWarn) findings.push({ level: "warn", msg: `DIRECTION §四 自查 ${clWarn} 项需改(见 qa-report.checklist)` });
+  findings.push({ level: "info", msg: `DIRECTION §四 自查:${clPass} 自动通过 / ${clWarn} 需改 / ${clManual} 待人工核对` });
+
   // ─ Verdict ─
   if (findings.some((f) => f.level === "error")) report.status = "fail";
   else if (findings.some((f) => f.level === "warn")) report.status = "warn";
-  else { report.status = "pass"; findings.push({ level: "info", msg: "自检通过:容器有效、抽样帧有内容、音频正常" }); }
+  else { report.status = "pass"; findings.push({ level: "info", msg: "自检通过:容器有效、抽样帧有内容、音频正常;§四 自动项全过" }); }
 
   writeReport(outputDir, report);
   return report;
+}
+
+/**
+ * DIRECTION §四 渲染后审美验收 checklist. Auto-judges what the storyboard +
+ * QA data allow (silence, transitions, lint, method variety, audio, ending);
+ * the rest (hook quality, emphasis-on-beat, one-focus, tabular scroll) are
+ * content judgments left as `manual` rows for a human to tick.
+ */
+function buildChecklist(sb: Storyboard, report: QaReport, projectRoot: string): ChecklistItem[] {
+  const scenes = sb.scenes ?? [];
+  const n = scenes.length;
+  const items: ChecklistItem[] = [];
+  const add = (nn: number, label: string, status: ChecklistItem["status"], detail: string) =>
+    items.push({ n: nn, label, status, detail });
+
+  // 1. 开场 10s 内有钩子事件 — content judgment; flag a bare fallback opener.
+  const s0 = scenes[0];
+  if (s0 && s0.method === "hf-css-fade") add(1, "开场 10s 内有钩子事件", "warn", "开场是 hf-css-fade 纯文字兜底 — 确认真有钩子(数据/悬念/冲突)");
+  else add(1, "开场 10s 内有钩子事件", "manual", "人工确认开场 10s 有钩子事件");
+
+  // 2. 全片无 >6s 视觉静默段 — auto from storyboard.
+  const longStatic = scenes.filter((s) =>
+    s.durationSec > 6 && (s.assets?.length ?? 0) === 0 && !s.data && !s.foreground && (!s.motion || s.motion.kind === "still"));
+  add(2, "全片无 >6s 视觉静默段", longStatic.length ? "warn" : "pass",
+    longStatic.length ? `镜 ${longStatic.map((s) => s.index).join("/")} >6s 静态 — 拆镜或加事件` : "无 >6s 静默镜");
+
+  // 3 / 4 — need audio-alignment / per-frame inspection: manual.
+  add(3, "关键数据/关键词有强调动效,落点在发音区间", "manual", "对齐音轨人工核对");
+  add(4, "同屏动效 ≤1 主 1 辅", "manual", "抽 3 处人工核对");
+
+  // 5. 转场硬切为主、种类 ≤2、无糊脸 dissolve — auto from storyboard.
+  const trans = scenes.slice(1).map((s) => (s as any).transition ?? "cut");
+  const distinct = [...new Set(trans)];
+  const hasDissolve = trans.some((t) => /dissolve/i.test(String(t)));
+  const cutShare = trans.length ? trans.filter((t) => t === "cut").length / trans.length : 1;
+  add(5, "转场硬切为主、种类 ≤2、无糊脸 dissolve",
+    hasDissolve ? "fail" : distinct.length > 2 || cutShare < 0.5 ? "warn" : "pass",
+    `转场 ${distinct.length} 种(${distinct.join("/") || "cut"}),硬切占 ${Math.round(cutShare * 100)}%${hasDissolve ? " — 含 dissolve!" : ""}`);
+
+  // 6. 土味 lint 0 + 色彩出自 tokens — auto: regenerate each scene's source, lint it.
+  let hits = 0; const badScenes: number[] = [];
+  for (const s of scenes) {
+    const r = s.method ? METHOD_RENDERERS[s.method] : undefined;
+    if (!r) continue;
+    try {
+      const ctx = {
+        width: sb.project.width, height: sb.project.height, fps: sb.project.fps,
+        projectRoot, projectTitle: sb.project.title,
+        design: resolveSceneDesign(sb.project.design, s.style),
+      };
+      const out: any = r(s, ctx as any);
+      const h = lintSource(out.html ?? out.tsx ?? "");
+      if (h.length) { hits += h.length; badScenes.push(s.index); }
+    } catch { /* skip un-renderable scene */ }
+  }
+  add(6, "土味 lint 0 命中;色彩全部出自 design tokens", hits ? "fail" : "pass",
+    hits ? `${hits} 处土味命中(镜 ${badScenes.join("/")})` : "lint 0 命中;方法均读 ctx.design tokens");
+
+  // 7. 数字全部等宽 — the number methods are tabular by construction; scroll is manual.
+  add(7, "数字全部等宽,滚动不抖", "manual", "数字方法(mega/stat-counter、d3、versus)均 tabular-nums;人工抽验滚动");
+
+  // 8. method 重复率 ≤40%,相邻镜不同方法 — auto.
+  const counts = new Map<string, number>();
+  for (const s of scenes) counts.set(s.method ?? "∅", (counts.get(s.method ?? "∅") ?? 0) + 1);
+  let top = 0, topId = ""; for (const [id, c] of counts) if (c > top) { top = c; topId = id; }
+  const share = n ? top / n : 0;
+  let adjacent = 0; for (let i = 1; i < n; i++) if (scenes[i].method && scenes[i].method === scenes[i - 1].method) adjacent++;
+  add(8, "method 重复率 ≤40%,相邻镜不同方法为主", share > 0.4 || adjacent > 0 ? "warn" : "pass",
+    `最常用 '${topId}' 占 ${Math.round(share * 100)}%(${top}/${n});相邻同法 ${adjacent} 处`);
+
+  // 9. 音画 — auto from the audio probe above.
+  if (!report.audio.expected) add(9, "音画:无削波/静音;BGM 不压解说", "manual", "本片无音轨(未配 TTS/BGM)");
+  else if (report.audio.silent) add(9, "音画:无削波/静音;BGM 不压解说", "warn", "音轨近乎无声");
+  else if (report.audio.clipping) add(9, "音画:无削波/静音;BGM 不压解说", "warn", "削波风险");
+  else add(9, "音画:无削波/静音;BGM 不压解说", "pass", `mean ${report.audio.meanDb}dB / max ${report.audio.maxDb}dB;BGM 压不压解说需人工听`);
+
+  // 10. 结尾定帧收束 ≥1.5s — auto from last scene duration.
+  const last = scenes.at(-1);
+  add(10, "结尾定帧收束 ≥1.5s", last && last.durationSec >= 1.5 ? "pass" : "warn",
+    last ? `末镜 ${last.durationSec}s(方法 ${last.method ?? "?"})` : "无末镜");
+
+  return items;
 }
 
 function writeReport(outputDir: string, report: QaReport): void {
@@ -226,5 +326,9 @@ export function summarizeReport(r: QaReport): string {
   const errs = r.findings.filter((f) => f.level === "error").length;
   const warns = r.findings.filter((f) => f.level === "warn").length;
   const dur = r.video.durationSec != null ? `${r.video.durationSec.toFixed(1)}s` : "?";
-  return `${mark} 渲后自检 [${r.status}] ${dur} ${r.video.width ?? "?"}×${r.video.height ?? "?"} · ${errs} 错 / ${warns} 警`;
+  const cl = r.checklist ?? [];
+  const clNote = cl.length
+    ? ` · §四 ${cl.filter((c) => c.status === "pass").length}✓/${cl.filter((c) => c.status === "warn" || c.status === "fail").length}✗/${cl.filter((c) => c.status === "manual").length}人工`
+    : "";
+  return `${mark} 渲后自检 [${r.status}] ${dur} ${r.video.width ?? "?"}×${r.video.height ?? "?"} · ${errs} 错 / ${warns} 警${clNote}`;
 }
