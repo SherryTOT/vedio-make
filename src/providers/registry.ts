@@ -34,6 +34,8 @@ import { openaiChat } from "./openai/chat.ts";
 import { openaiTts } from "./openai/tts.ts";
 import { openaiImage } from "./openai/image.ts";
 
+import { mytokkImage } from "./mytokk/image.ts";
+
 import { tavilySearch } from "./tavily/search.ts";
 
 import { edgeTts } from "./edge/tts.ts";
@@ -62,6 +64,7 @@ const REGISTRY = {
   image: {
     minimax: minimaxImage,
     openai: openaiImage,
+    mytokk: mytokkImage,   // gpt-5.5 via Responses API image tool (中转); supports transparent bg
   } as Record<string, ImageClient>,
   search: {
     minimax: minimaxSearch,

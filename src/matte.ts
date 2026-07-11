@@ -64,6 +64,12 @@ function runHfMatteModel(input: string, output: string, device: string, model: s
   }
 }
 
+/** Matte a single file to an explicit output path (u2net). Reused by `pipeline stickers`. */
+export function matteFile(input: string, output: string, opts: { model?: string; device?: string } = {}): void {
+  if (opts.model) runHfMatteModel(input, output, opts.device || "auto", opts.model);
+  else runHfMatte(input, output, opts.device || "auto");
+}
+
 function matteOne(absInput: string, opts: MatteOpts, mattedDir: string): string {
   const base = path.basename(absInput, path.extname(absInput));
   const outAbs = path.join(mattedDir, `${base}.matte.png`);

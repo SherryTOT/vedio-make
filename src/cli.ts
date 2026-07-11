@@ -28,6 +28,7 @@ import { runVoice } from "./voice.ts";
 import { runBgm } from "./bgm.ts";
 import { runAnalyze } from "./analyze.ts";
 import { runImages } from "./images.ts";
+import { runStickers } from "./stickers.ts";
 import { runResearch } from "./research.ts";
 import { runMatte } from "./matte.ts";
 import { runFetch } from "./fetch-assets.ts";
@@ -108,6 +109,8 @@ function usage(): never {
   pipeline storyboard [--in JSON] [--out HTML]
   pipeline research  [--in JSON] [--provider <${searchProvs}>] [--chat-provider <${chatProvs}>] [--force]
   pipeline images    [--in JSON] [--provider <${imageProvs}>] [--chat-provider <${chatProvs}>] [--aspect 16:9] [--scene N] [--n 1-3] [--raw] [--force]
+  pipeline stickers  --prompts <file> | --prompt "<subject>"  [--provider <${imageProvs}>] [--aspect 3:4] [--in JSON] [--force]
+                     (白底单体生图 → u2net 抠像 → assets/stickers/*.matte.png,喂 hf-sticker-pop)
   pipeline tts       [--in JSON] [--provider <${ttsProvs}>] [--voice <id>] [--speed 1.0] [--force]
   pipeline say       "<text>" | --file F  [--voice <id>] [--speed 1.0] [--emotion happy] [--out mp3] [--provider <${ttsProvs}>]
                      (read ANY text aloud → one mp3; free Edge voices need no key, minimax:* are paid)
@@ -271,6 +274,33 @@ async function main() {
       onlyIndices,
       rawPrompts,
       candidates,
+    });
+    return;
+  }
+
+  if (cmd === "stickers") {
+    const flags = parseFlags(rest);
+    const provider = (flags.provider as string) || "mytokk";
+    const aspect = flags.aspect as "1:1" | "3:4" | "9:16" | "16:9" | "4:3" | undefined;
+    const force = Boolean(flags.force);
+    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    let prompts: string[] = [];
+    if (typeof flags.prompts === "string") {
+      const pf = path.resolve(root, flags.prompts);
+      if (!fs.existsSync(pf)) { console.error(`prompts file not found: ${pf}`); process.exit(1); }
+      prompts = fs.readFileSync(pf, "utf8").split(/\r?\n/).map((s) => s.trim()).filter((l) => l && !l.startsWith("#"));
+    } else if (typeof flags.prompt === "string") {
+      prompts = [flags.prompt];
+    } else if (typeof flags._ === "string") {
+      prompts = [flags._];
+    }
+    if (!prompts.length) {
+      console.error(`pipeline stickers: need --prompts <file> (one subject per line) or --prompt "<subject>"`);
+      process.exit(1);
+    }
+    await runStickers({
+      prompts, projectRoot: root, provider, aspectRatio: aspect, force,
+      storyboardPath: fs.existsSync(inPath) ? inPath : undefined,
     });
     return;
   }
