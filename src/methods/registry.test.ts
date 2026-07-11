@@ -241,3 +241,33 @@ test("hf-scribble-annotate: caps drawn strokes ≤3 (4 nodes → 3 arrows, no ri
   assert.equal((out.html.match(/class="arrow"/g) || []).length, 3);
   assert.equal((out.html.match(/class="ring"/g) || []).length, 0, "no ring at 4 nodes (keeps drawn ≤3)");
 });
+
+// ── hf-sticker-pop (P1 §三.5) ──
+
+test("hf-sticker-pop: pops matte stickers with settle + idle sway + exit; sideFiles wired", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vm-stk-"));
+  fs.mkdirSync(path.join(root, "assets", "stickers"), { recursive: true });
+  for (const f of ["a.png", "b.png"]) fs.writeFileSync(path.join(root, "assets", "stickers", f), "x");
+  const out: any = METHOD_RENDERERS["hf-sticker-pop"](
+    mkScene({ assets: ["stickers/a.png", "stickers/b.png"] }), ctx("inkwork", root));
+  assert.equal(out.engine, "hyperframes");
+  assert.equal((out.html.match(/class="sticker"/g) || []).length, 2);
+  assert.ok(out.html.includes('ease: "back.out(1.4)"'), "pop scale settle back.out(1.4)");
+  assert.ok(out.html.includes('ease: "sine.inOut"') && out.html.includes("yoyo: true"), "idle sway sine.inOut");
+  assert.ok(!/repeat: -1/.test(out.html), "finite sway repeat (seek-safe, no repeat:-1)");
+  assert.equal(Object.keys(out.sideFiles).length, 2, "sticker PNGs copied via sideFiles");
+});
+
+test("hf-sticker-pop: no sticker assets → falls back to css-fade", () => {
+  const out: any = METHOD_RENDERERS["hf-sticker-pop"](mkScene({ assets: [] }), ctx("inkwork"));
+  assert.ok(!out.html.includes('class="sticker"'), "no sticker layer without assets");
+});
+
+test("hf-sticker-pop: caps at ≤4 stickers on screen", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vm-stk4-"));
+  fs.mkdirSync(path.join(root, "assets"), { recursive: true });
+  const assets: string[] = [];
+  for (let i = 0; i < 6; i++) { const f = `s${i}.png`; fs.writeFileSync(path.join(root, "assets", f), "x"); assets.push(f); }
+  const out: any = METHOD_RENDERERS["hf-sticker-pop"](mkScene({ assets }), ctx("inkwork", root));
+  assert.equal((out.html.match(/class="sticker"/g) || []).length, 4, "≤4 stickers");
+});

@@ -32,6 +32,7 @@ import { rmD3LineDraw } from "./impl/rm-d3-line-draw.ts";
 import { rmD3BarRace } from "./impl/rm-d3-bar-race.ts";
 import { hfWordPunch } from "./impl/hf-word-punch.ts";
 import { hfScribbleAnnotate } from "./impl/hf-scribble-annotate.ts";
+import { hfStickerPop } from "./impl/hf-sticker-pop.ts";
 
 export const METHOD_RENDERERS: Record<string, MethodRenderer> = {
   "hf-css-fade": hfCssFade,
@@ -56,4 +57,5 @@ export const METHOD_RENDERERS: Record<string, MethodRenderer> = {
   "rm-d3-bar-race": rmD3BarRace,
   "hf-word-punch": hfWordPunch,
   "hf-scribble-annotate": hfScribbleAnnotate,
+  "hf-sticker-pop": hfStickerPop,
 };

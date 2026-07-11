@@ -432,6 +432,32 @@
       "implemented": true
     },
     {
+      "id": "hf-sticker-pop",
+      "label": "Sticker Pop (matte-cut entity)",
+      "engine": "hyperframes",
+      "skill": "gsap",
+      "library": "gsap",
+      "reliability": "S",
+      "tags": [
+        "sticker",
+        "entity",
+        "person",
+        "product",
+        "logo",
+        "collage",
+        "小Lin说"
+      ],
+      "whenToUse": "A person / company / product entity takes the stage (小Lin说 collage). Matte-cut PNGs pop in (scale 0.6→1 back.out) with a settle tilt, idle-sway, then shrink out. Needs transparent sticker PNGs in scene.assets (white-bg 生图 → matte, see P2 `pipeline stickers`). ≤4 on screen. Without stickers it falls back to hf-css-fade.",
+      "inputs": [
+        "text"
+      ],
+      "assetNeeds": [
+        "image"
+      ],
+      "fallback": "hf-css-fade",
+      "implemented": true
+    },
+    {
       "id": "hf-poster-hero",
       "label": "Cinematic Poster Hero (image + hero text)",
       "engine": "hyperframes",
