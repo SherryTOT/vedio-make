@@ -1,34 +1,43 @@
-# Design system
+# 叙事调性档 · design.md
 
-## Palette
+> 本文件只描述「这片子怎么讲」——节奏密度、语气、目标观众、风格档。
+> **不写任何色值 / 字体 / 光效 / 3D 相机。** 视觉真相唯一来源是 `src/methods/designs.ts`
+> 的 design tokens（印刷工坊 5 预设）；动效规范见 `docs/MOTION.md`；台词→方法的选法见
+> `docs/DIRECTION.md`。analyzer 会把本文件逐字当上下文——规则越清楚，方法/语气/配音选得越准。
 
-- Background: `#050308` deep night, `#0a0612` to `#02010a` gradient
-- Primary text: `#f4ead0` cream
-- Gold accent: `#d4a64a` solid, `#f4d479 → #c98f2e` highlight gradient
-- Purple accent: `#3a1d6d` to `#1e0e3c`
-- Muted: `rgba(244,234,208,0.45)`
+## 设计预设（视觉血统）
 
-## Typography
+- 预设 id：`inkwork`
+  - 可选：`inkwork` 印刷工坊 · `swiss` 极简黑白 · `magazine` 杂志编辑 · `nocturne` 克制深色 · `claywarm` 暖手作
+- 一片可分段换档（开场 → 主体 → 收尾），但**一段内只用一个预设**（DIRECTION §二）。
+- 每镜可在分镜台用「风格」下拉覆盖项目预设；改预设即重渲。
 
-- Sans (default): system / "PingFang SC" / "Source Han Sans SC" — for Chinese, body, captions
-- Display: same sans, weight 500, letter-spacing 0.04em — for hero phrases
-- Mono: `ui-monospace` / Menlo — for numbers and timestamps
+## 风格档案（DIRECTION §二）
 
-## Motion
+- 主档：**C 印刷工坊经典**（默认，现有方法原样，节奏 4–5s/事件）。
+- 数据评测段落切 **A 极客湾式**（预设走 `nocturne` 或 `swiss`，节奏 2.5–3.5s/事件）。
+- 叙事科普段落切 **B 小Lin说式**（预设走 `inkwork` 或 `claywarm`，节奏 3–4s/事件）。
 
-- Eases: `power3.out` / `back.out(1.5)` / `sine.inOut` (mix at least 3 per scene)
-- Stagger: 80-160 ms between sibling elements
-- Pulse / breath: 6-10% scale, 0.6-1.2 s duration
-- Camera (3D scenes): rotationY ±25°, rotationX ±12°, perspective 1400 px set via GSAP transformPerspective
+## 节奏密度（心跳）
 
-## Frame composition
+- 目标：每 **2.5–4s** 一个视觉事件；**>6s 无事件 = 违规**（MOTION.md §二 / slideshow.ts 已检）。
+- tempo：`deliberate`（克制、从容）为底色；数据段可提到 `snappy`，情绪段落降到 `gentle`。
+- 全片 method 重复率 ≤40%，相邻两镜尽量不同方法（DIRECTION §一）。
 
-- Default size: 1920 × 1080, 30 fps
-- Safe area: 120 px horizontal padding, 80 px top/bottom
-- No solid full-screen gradients on dark backgrounds — use radial pools instead
+## 语气 / 目标观众
 
-## Don'ts
+- 观众：对题材有兴趣但非专家的中文观众。
+- 语气：**结论先行、克制、不卖弄**；金句承担节拍，不靠堆形容词煽动。
+- 每段落尽量以一个「事件」（数据 / 冲突 / 悬念）开场，别用过渡句起头。
 
-- No `Math.random()` or `Date.now()` in animations (must be deterministic)
-- No `repeat: -1` on GSAP timelines
-- No `<br>` for line breaks — let text wrap via max-width
+## 配音（可按项目覆盖）
+
+- 默认解说：`presenter_male`（沉稳播客感）；情绪 / 自述段可切 `audiobook_male_1`。
+- 引用「另一方说……」用 `presenter_female` 换声区分。
+- 换声频率：每 60s 约 2–3 次即可，别为换而换。
+
+## Don'ts（继承印刷工坊命门，一票否决）
+
+- 禁渐变 / 发光 / 投影 / AI 金光紫气 / emoji 上画面（MOTION.md §一红线，lint 级）。
+- **动效参数**不在这里写——唯一事实源是 `docs/MOTION.md`。
+- **色值 / 字体**不在这里写——唯一事实源是 design 预设 tokens。

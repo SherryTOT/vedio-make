@@ -149,3 +149,88 @@ export function resolveSceneDesign(
     __presetId: base.__presetId,
   };
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Image-prompt palette — natural-language colour derived from the LIVE tokens.
+//
+// The 整体设计 panel lets users override paper/ink/accent to any hex, so a
+// generated background must describe the *current* colours, not a frozen preset
+// string. That keeps生图 素材 and the layout the same blood-type (DIRECTION §〇).
+// Pure + deterministic: same tokens → same text. Print-workshop guardrails
+// (matte / flat / no gradient / glow / metallic) are baked into the sentence so
+// image models can't smuggle back the AI-gold look the design system forbids.
+// ───────────────────────────────────────────────────────────────────────────
+
+const HUE_NAMES: Array<[number, string]> = [
+  [16, "red"], [40, "orange"], [52, "amber"], [68, "yellow"],
+  [95, "yellow-green"], [150, "green"], [185, "teal"], [205, "cyan"],
+  [250, "blue"], [275, "indigo"], [305, "violet"], [340, "magenta"], [360, "red"],
+];
+
+function parseHex(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex).trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Approximate an English colour name for a #rrggbb value (override-safe). */
+export function hexToName(hex: string): string {
+  const rgb = parseHex(hex);
+  if (!rgb) return "neutral";
+  const [r, g, b] = rgb;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const L = (max + min) / 510;          // lightness 0..1
+  const chroma = (max - min) / 255;     // colourfulness 0..1
+  const warm = r - b > 4;               // warm (reddish/amber) vs cool tint
+  let h = 0;
+  if (chroma > 0) {
+    const d = max - min;
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h = h * 60; if (h < 0) h += 360;
+  }
+  // Pale / near-white tier — creams and off-whites, never "pale orange".
+  if (L >= 0.86 && chroma < 0.16) {
+    if (chroma < 0.015 && Math.abs(r - b) <= 3) return "bright white";
+    return warm ? "warm cream" : "cool off-white";
+  }
+  // Near-neutral greys / blacks.
+  if (chroma < 0.06) {
+    if (L >= 0.55) return "light grey";
+    if (L >= 0.32) return "mid grey";
+    if (L >= 0.16) return warm ? "warm charcoal" : "charcoal";
+    return warm ? "warm near-black" : "near-black";
+  }
+  // Warm dark low-chroma orange/amber reads as brown, not "dark orange".
+  if (h >= 12 && h < 50 && L < 0.5 && chroma < 0.6) {
+    if (L < 0.22) return "deep brown-black";
+    if (L < 0.38) return "espresso brown";
+    return "terracotta brown";
+  }
+  const hue = HUE_NAMES.find(([hi]) => h < hi)![1];
+  const lightWord =
+    L >= 0.85 ? "pale " : L >= 0.68 ? "light " : L >= 0.42 ? "" : L >= 0.24 ? "deep " : "dark ";
+  const satWord = chroma < 0.30 ? "muted " : "";
+  return `${lightWord}${satWord}${hue}`.trim();
+}
+
+/** True when the paper (background) token is a dark scheme (Rec.709 luma < 0.5). */
+export function isDarkPaper(paper: string): boolean {
+  const rgb = parseHex(paper);
+  if (!rgb) return false;
+  const [r, g, b] = rgb;
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+}
+
+/** Natural-language palette sentence for image-generation prompts. */
+export function tokensToPromptPalette(
+  d: Pick<DesignTokens, "paper" | "ink" | "accent">,
+): string {
+  const bg = hexToName(d.paper), ink = hexToName(d.ink), acc = hexToName(d.accent);
+  const scheme = isDarkPaper(d.paper)
+    ? `restrained dark scheme — ${bg} background, ${ink} text`
+    : `restrained light scheme — ${bg} paper, ${ink} ink`;
+  return `${scheme}, ${acc} as the single accent colour. Matte, flat, print-like colour: no gradients, no glow, no neon, no metallic gold sheen.`;
+}

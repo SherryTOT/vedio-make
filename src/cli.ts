@@ -251,7 +251,6 @@ async function main() {
     const flags = parseFlags(rest);
     const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
     const assetsDir = path.resolve(root, "assets");
-    const designPath = path.resolve(root, "design.md");
     const force = Boolean(flags.force);
     const rawPrompts = Boolean(flags.raw);
     const provider = flags.provider as string | undefined;
@@ -264,7 +263,6 @@ async function main() {
     await runImages({
       storyboardPath: inPath,
       assetsDir,
-      designPath,
       projectRoot: root,
       force,
       provider,

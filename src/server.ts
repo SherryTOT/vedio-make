@@ -234,7 +234,7 @@ async function runTaskBody(t: Task, body: any): Promise<void> {
       break;
     case "images":
       await runImages({
-        storyboardPath: sbPath, assetsDir, designPath,
+        storyboardPath: sbPath, assetsDir,
         projectRoot: proj.dir,
         force: body.force ?? false,
         provider: body.provider,
