@@ -5,12 +5,23 @@ import { type MethodRenderer, pickGeneratedBg, onVeilText, buildMotionScript, bu
 // hf-kinetic-text — GSAP kinetic text for short hero phrases
 // ──────────────────────────────────────────────────────────────────────────
 export const hfKineticText: MethodRenderer = (scene, ctx) => {
-  const segments = (scene.text.replace(/\s+/g, " ").trim().match(/[A-Za-z0-9]+|[一-鿿]|[^\sA-Za-z0-9]/g) ?? [])
-    .map((s) => s.trim())
-    .filter((s) => s && !/^[，。、！？；：·,.]$/.test(s));
+  // Tokenise for per-unit animation: Latin/digit words stay whole, CJK animates
+  // per char. Whitespace is not a token — it becomes a `w-sp` marker on the
+  // preceding span. Without it "Claude Fable 5" fuses into "ClaudeFable5":
+  // the flex column-gap (4px) is no word gap at 110px type.
+  const raw = scene.text.replace(/\s+/g, " ").trim().match(/[A-Za-z0-9]+| |[一-鿿]|[^ A-Za-z0-9]/g) ?? [];
+  const segments: { s: string; sp: boolean }[] = [];
+  let pendingSp = false;
+  for (const t of raw) {
+    if (t === " ") { pendingSp = true; continue; }
+    if (/^[，。、！？；：·,.]$/.test(t)) continue; // dropped punctuation, unchanged behavior
+    if (pendingSp && segments.length) segments[segments.length - 1].sp = true;
+    segments.push({ s: t, sp: false });
+    pendingSp = false;
+  }
 
   const wordEls = segments
-    .map((seg, i) => `<span class="w" data-i="${i}">${escapeHtml(seg)}</span>`)
+    .map((seg, i) => `<span class="w${seg.sp ? " w-sp" : ""}" data-i="${i}">${escapeHtml(seg.s)}</span>`)
     .join("\n      ");
   const bgImage = pickGeneratedBg(scene, ctx);
   const fg = pickForeground(scene, ctx);
@@ -38,6 +49,7 @@ export const hfKineticText: MethodRenderer = (scene, ctx) => {
   ${focusOverlay.css}
   .stage { display: flex; flex-wrap: wrap; gap: 8px 4px; padding: 0 120px; justify-content: center; max-width: ${ctx.width - 200}px; position: relative; z-index: 3; }
   .w { font-size: 110px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.14; opacity: 0; transform-origin: 50% 100%; color: ${bgImage ? onVeilText(ctx.design) : ctx.design.ink}; }
+  .w.w-sp { margin-right: 0.26em; } /* word gap where the source had whitespace */
 </style>
 </head>
 <body>

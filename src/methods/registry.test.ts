@@ -271,3 +271,22 @@ test("hf-sticker-pop: caps at ≤4 stickers on screen", () => {
   const out: any = METHOD_RENDERERS["hf-sticker-pop"](mkScene({ assets }), ctx("inkwork", root));
   assert.equal((out.html.match(/class="sticker"/g) || []).length, 4, "≤4 stickers");
 });
+
+test("hf-kinetic-text keeps word gaps in Latin/CJK mixed phrases (space-eating fix)", () => {
+  const out: any = METHOD_RENDERERS["hf-kinetic-text"](
+    mkScene({ method: "hf-kinetic-text", text: "Claude Fable 5\n最聪明的公开 Claude" }),
+    ctx("inkwork"),
+  );
+  // Latin words keep their identity as whole tokens…
+  for (const w of [">Claude<", ">Fable<", ">5<"]) assert.ok(out.html.includes(w), `${w} missing`);
+  // …and every whitespace in the source becomes a real spacer class on the
+  // preceding span, so "Claude Fable 5" can no longer fuse into "ClaudeFable5".
+  assert.match(out.html, /class="w w-sp"[^>]*>Claude</, "no gap after first Claude");
+  assert.match(out.html, /class="w w-sp"[^>]*>Fable</, "no gap after Fable");
+  assert.match(out.html, /class="w w-sp"[^>]*>5</, "no gap after 5 (newline collapses to space)");
+  assert.match(out.html, /class="w w-sp"[^>]*>开</, "no gap after 开 (CJK before Latin)");
+  assert.ok(out.html.includes(".w.w-sp"), "spacer css rule missing");
+  // CJK still animates per char (kinetic's whole point) — no spacer inside 最聪明的
+  assert.match(out.html, /class="w"[^>]*>最</);
+  assert.match(out.html, /class="w"[^>]*>聪</);
+});
