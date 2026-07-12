@@ -1,17 +1,20 @@
-// Vedio Make 分镜台 — vanilla front-end on top of the existing pipeline daemon.
+const $ = (s) => document.querySelector(s);
 const TOKEN = window.__PIPELINE_TOKEN__ || new URLSearchParams(location.search).get("token") || "";
 const AUTH = TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
-const $ = (s) => document.querySelector(s);
 
+// transition ids the renderer understands ("" = 默认 cut)
 const TRANSITIONS = ["", "cut", "fade", "dip-to-black", "wipe-left", "wipe-right", "push-up"];
-const state = { pid: null, sb: null, catalog: null, designs: null, lint: null, saveTimer: null, busy: false, dirty: false, curTask: null, lastTask: null };
+const state = { pid: null, sb: null, catalog: null, designs: null, lint: null, saveTimer: null, busy: false, dirty: false, curTask: null, lastTask: null, sel: 0 };
 
 async function api(path, opts = {}) {
-  const r = await fetch(path, { ...opts, headers: { ...(opts.headers || {}), ...AUTH } });
-  const ct = r.headers.get("content-type") || "";
-  const body = ct.includes("json") ? await r.json().catch(() => ({})) : await r.text();
-  if (!r.ok) throw new Error((body && body.error) || (typeof body === "string" ? body.slice(0, 200) : `HTTP ${r.status}`));
-  return body;
+  const res = await fetch(path, { ...opts, headers: { ...AUTH, ...(opts.headers || {}) } });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { const j = await res.json(); msg = j.error || msg; } catch {}
+    throw new Error(msg);
+  }
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("json") ? res.json() : res.text();
 }
 function fileUrl(rel) { return `/api/projects/${state.pid}/files/${rel.split("/").map(encodeURIComponent).join("/")}${TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""}`; }
 function fmt(sec) { sec = Math.max(0, Math.round(sec || 0)); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`; }
@@ -44,7 +47,8 @@ async function loadProjects() {
     const scenes = sb ? sb.scenes.length : 0;
     const dur = sb ? sb.scenes.reduce((s, x) => s + (x.durationSec || 0), 0) : 0;
     const stages = sb ? sb.stages : null;
-    const card = el("article", "pcard");
+    const card = el("button", "pcard");
+    card.type = "button";
     card.appendChild(el("div", "cover", sb ? `▦ ${scenes}` : "—"));
     const body = el("div", "pc-body");
     body.appendChild(el("div", "pc-title", esc(p.title || "未命名")));
@@ -62,10 +66,12 @@ function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 async function openProject(id) {
   state.pid = id;
   let detail;
-  try { detail = await api(`/api/projects/${id}`); } catch (e) { return toast("打开失败:" + e.message, "error"); }
+  try { detail = await api(`/api/projects/${id}`); }
+  catch (e) { toast("打开失败:" + e.message, "error"); showProjects(); return; }
   state.sb = detail.storyboard;
   state.catalog = await loadCatalog(id);
   state.designs = await api("/api/designs").catch(() => null);
+  state.sel = 0;
   showBoard();
   renderBoardHeader(detail.project);
   renderScenes();
@@ -90,12 +96,200 @@ function renderBoardHeader(project) {
   updateHint();
 }
 
-// ─── scene table ───
+// ─── master-detail board ───
+// renderScenes() keeps its historical name: every task/lint/save path calls it.
+// It now paints the strip (master list) + the detail editor for state.sel.
 function renderScenes() {
-  const body = $("#scenes-body");
-  body.innerHTML = "";
-  if (!state.sb || !state.sb.scenes.length) { body.appendChild(el("tr", "", `<td colspan="7" class="pv-empty" style="height:120px">这个项目还没有 storyboard。先在 Claude 里跑 plan / analyze,或新建项目。</td>`)); return; }
-  state.sb.scenes.forEach((sc, i) => body.appendChild(buildRow(sc, i)));
+  clampSel();
+  renderStrip();
+  renderDetail();
+}
+function clampSel() {
+  const n = state.sb ? state.sb.scenes.length : 0;
+  if (state.sel >= n) state.sel = n - 1;
+  if (state.sel < 0) state.sel = 0;
+}
+function selScene() { return state.sb && state.sb.scenes[state.sel]; }
+
+function methodShort(id) { return id ? id.replace(/^(hf|rm)-/, "") : "未选"; }
+
+function renderStrip() {
+  const strip = $("#strip");
+  strip.innerHTML = "";
+  if (!state.sb || !state.sb.scenes.length) {
+    strip.appendChild(el("div", "strip-empty", "这个项目还没有分镜。先「分析」或加一个镜头。"));
+    return;
+  }
+  state.sb.scenes.forEach((sc, i) => {
+    const item = el("button", "strip-item");
+    item.type = "button";
+    item.setAttribute("role", "option");
+    if (i === state.sel) { item.classList.add("sel"); item.setAttribute("aria-current", "true"); }
+    const status = sc.status || (sc.renderedPath ? "rendered" : "pending");
+
+    const thumb = el("div", "si-thumb");
+    if (sc.renderedPath) {
+      const v = el("video"); v.src = fileUrl(sc.renderedPath); v.muted = true; v.preload = "metadata"; v.playsInline = true;
+      thumb.appendChild(v);
+    } else {
+      const img = sc.assets && sc.assets.find((a) => /\.(png|jpe?g|webp|gif)$/i.test(a));
+      if (img) { const im = el("img"); im.loading = "lazy"; im.src = fileUrl(img.startsWith("assets/") ? img : "assets/" + img); thumb.appendChild(im); }
+      else thumb.appendChild(el("span", "si-noimg", "—"));
+    }
+
+    const main = el("div", "si-main");
+    const top = el("div", "si-top");
+    top.appendChild(el("span", "si-n", "#" + (sc.index ?? i + 1)));
+    top.appendChild(el("span", "si-text", esc((sc.text || "(空白字幕)").split("\n")[0])));
+    main.appendChild(top);
+    const meta = el("div", "si-meta");
+    meta.appendChild(el("span", "si-method", esc(methodShort(sc.method))));
+    meta.appendChild(el("span", "si-dur", (sc.durationSec || 0).toFixed(1) + "s"));
+    const st = el("span", "st"); st.dataset.s = status; st.title = stStatusText(status);
+    meta.appendChild(st);
+    const lf = state.lint && state.lint[sc.index];
+    if (lf && lf.length) { const w = el("span", "si-warn", "⚠"); w.title = lf.map((f) => f.msg).join("\n"); meta.appendChild(w); }
+    main.appendChild(meta);
+
+    item.append(thumb, main);
+    item.addEventListener("click", () => selectScene(i));
+    strip.appendChild(item);
+  });
+}
+
+function selectScene(i) {
+  state.sel = i;
+  renderStrip();
+  renderDetail();
+  const it = $("#strip").children[i];
+  if (it && it.scrollIntoView) it.scrollIntoView({ block: "nearest" });
+}
+
+// Update just the strip row for the selected scene while typing (no full repaint,
+// so the textarea keeps focus).
+function syncStripRow() {
+  const sc = selScene(); if (!sc) return;
+  const item = $("#strip").children[state.sel]; if (!item) return;
+  const t = item.querySelector(".si-text"); if (t) t.textContent = (sc.text || "(空白字幕)").split("\n")[0];
+  const m = item.querySelector(".si-method"); if (m) m.textContent = methodShort(sc.method);
+}
+
+function renderDetail() {
+  const pane = $("#detail");
+  pane.innerHTML = "";
+  const sc = selScene();
+  if (!sc) { pane.appendChild(el("div", "d-empty", "左侧选一个镜头,或「＋ 加一个镜头」。")); return; }
+  const i = state.sel;
+  const status = sc.status || (sc.renderedPath ? "rendered" : "pending");
+
+  // ── preview + actions ──
+  const head = el("div", "d-head");
+  const pv = el("div", "d-preview");
+  if (sc.renderedPath) {
+    const v = el("video"); v.src = fileUrl(sc.renderedPath); v.muted = true; v.loop = true; v.playsInline = true; v.controls = false;
+    v.addEventListener("mouseenter", () => v.play().catch(() => {}));
+    v.addEventListener("mouseleave", () => v.pause());
+    v.addEventListener("click", () => lightbox("video", v.src));
+    pv.appendChild(v);
+  } else {
+    const img = sc.assets && sc.assets.find((a) => /\.(png|jpe?g|webp|gif)$/i.test(a));
+    if (img) { const im = el("img"); im.src = fileUrl(img.startsWith("assets/") ? img : "assets/" + img); im.addEventListener("click", () => lightbox("img", im.src)); pv.appendChild(im); }
+    else pv.appendChild(el("div", "pv-empty", "未渲染 — 右侧「渲染此镜」看效果"));
+  }
+  head.appendChild(pv);
+
+  const side = el("div", "d-side");
+  const stRow = el("div", "d-strow");
+  const stEl = el("span", "st", stStatusText(status)); stEl.dataset.s = status;
+  stRow.appendChild(stEl);
+  stRow.appendChild(el("span", "d-time", `${fmt(sc.startSec)}–${fmt(sc.endSec)} · ${(sc.durationSec || 0).toFixed(1)}s`));
+  side.appendChild(stRow);
+  const rBtn = el("button", "primary d-render", "渲染此镜"); rBtn.type = "button";
+  rBtn.addEventListener("click", () => runOp("render", { only: sc.index }, `渲染镜头 #${sc.index}`));
+  side.appendChild(rBtn);
+  const ops = el("div", "d-ops");
+  const opBtn = (txt, title, fn, danger) => { const b = el("button", "rc" + (danger ? " rc-del" : ""), txt); b.type = "button"; b.title = title; b.addEventListener("click", fn); return b; };
+  ops.append(
+    opBtn("↑ 上移", "上移", () => moveScene(i, -1)),
+    opBtn("↓ 下移", "下移", () => moveScene(i, 1)),
+    opBtn("✕ 删除", "删除镜头", () => { if (confirm(`删除镜头 #${sc.index}?`)) deleteScene(i); }, true),
+  );
+  side.appendChild(ops);
+  side.appendChild(el("div", "d-keys", "快捷键:↑↓ 切镜 · Enter 改字幕 · R 渲染此镜"));
+  head.appendChild(side);
+  pane.appendChild(head);
+
+  // ── fields ──
+  const form = el("div", "d-form");
+
+  form.appendChild(dField("字幕文本", dTextarea("text", sc.text || "", "这一镜的解说词/字幕", 2, () => syncStripRow())));
+
+  const mRow = el("div", "d-row2");
+  mRow.appendChild(dField("方法", methodControl("method", sc.method)));
+  mRow.appendChild(dField("备选(需 S 档)", methodControl("fallback", sc.fallback)));
+  form.appendChild(mRow);
+
+  form.appendChild(dField("选法理由", dTextarea("reasoning", sc.reasoning || "", "为什么这一镜用这个方法(分析器会写,人可改)", 2)));
+
+  const xRow = el("div", "d-row2");
+  xRow.appendChild(dField("转场(入)", transitionSelect(i, sc.transition)));
+  if (state.designs) xRow.appendChild(dField("风格", scenePresetSelect(i, sc.style)));
+  form.appendChild(xRow);
+
+  const badges = el("div", "chips");
+  if (sc.assets && sc.assets.length) sc.assets.forEach((a) => badges.appendChild(el("span", "chip asset", esc(a.split("/").pop()))));
+  if (sc.motion && sc.motion.kind && sc.motion.kind !== "still") badges.appendChild(el("span", "chip", "运镜·" + esc(sc.motion.kind)));
+  if (sc.imageStyle) badges.appendChild(el("span", "chip", esc(sc.imageStyle)));
+  if (sc.needsMatting) badges.appendChild(el("span", "chip", "抠像"));
+  if (sc.burnSubtitle) badges.appendChild(el("span", "chip", "烧字幕"));
+  if (sc.style) badges.appendChild(el("span", "chip", "风格·" + esc(sc.style.presetId || "自定义")));
+  const lf = state.lint && state.lint[sc.index];
+  if (lf && lf.length) { const c = el("span", "chip chip-warn", "⚠ 土味 " + lf.length); c.title = lf.map((f) => f.msg).join("\n"); badges.appendChild(c); }
+  if (badges.children.length) form.appendChild(dField("资源 / 修饰", badges));
+
+  form.appendChild(dField("备注(每行一条)", dTextarea("notes", (sc.notes || []).join("\n"), "给渲染/后期的备注", 2)));
+
+  pane.appendChild(form);
+}
+
+function dField(label, node) { const w = el("div", "d-field"); w.appendChild(el("div", "field-label", label)); w.appendChild(node); return w; }
+
+function autosize(ta) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight + 2, 260) + "px"; }
+function dTextarea(field, value, ph, rows, onInput) {
+  const ta = el("textarea", "d-ta"); ta.dataset.field = field; ta.value = value; ta.placeholder = ph || ""; ta.rows = rows || 2;
+  ta.addEventListener("input", () => { applyField(field, ta.value); autosize(ta); if (onInput) onInput(); scheduleSave(); });
+  requestAnimationFrame(() => autosize(ta));
+  return ta;
+}
+function applyField(field, value) {
+  const sc = selScene(); if (!sc) return;
+  if (field === "notes") sc.notes = value.split("\n").map((s) => s.trim()).filter(Boolean);
+  else if (field === "reasoning") sc.reasoning = value || null;
+  else sc[field] = value;
+}
+
+function methodControl(field, value) {
+  let ctrl;
+  if (state.catalog) {
+    ctrl = el("select", "vm-input");
+    ctrl.appendChild(new Option("— 无 —", ""));
+    let has = false;
+    for (const [id, m] of state.catalog) { const o = new Option(`${id} · ${m.label || ""} [${m.engine}/${m.reliability}]`, id); if (id === value) { o.selected = true; has = true; } ctrl.appendChild(o); }
+    if (value && !has) { const o = new Option(value + " (未在 catalog)", value); o.selected = true; ctrl.appendChild(o); }
+  } else {
+    ctrl = el("input", "vm-input"); ctrl.value = value || ""; ctrl.placeholder = "method id";
+  }
+  const commit = () => { const sc = selScene(); if (sc) { sc[field] = ctrl.value || null; syncStripRow(); scheduleSave(); } };
+  ctrl.addEventListener("change", commit);
+  if (ctrl.tagName === "INPUT") ctrl.addEventListener("input", commit);
+  return ctrl;
+}
+
+function transitionSelect(i, value) {
+  const s = el("select", "vm-input");
+  for (const t of TRANSITIONS) { const o = new Option(t || "默认(cut)", t); if (t === (value || "")) o.selected = true; s.appendChild(o); }
+  s.addEventListener("change", () => { const sc = state.sb.scenes[i]; if (s.value) sc.transition = s.value; else delete sc.transition; scheduleSave(); });
+  return s;
 }
 
 // ─── scene add / delete / reorder ───
@@ -107,6 +301,7 @@ function moveScene(i, dir) {
   const a = state.sb.scenes, j = i + dir;
   if (j < 0 || j >= a.length) return;
   const tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+  state.sel = j;
   renumber(); scheduleSave(); renderScenes(); renderBoardHeader();
 }
 function deleteScene(i) {
@@ -114,7 +309,9 @@ function deleteScene(i) {
 }
 function addScene() {
   state.sb.scenes.push({ index: 0, cues: [], startSec: 0, endSec: 0, durationSec: 3, text: "", method: null, fallback: null, reasoning: null, assets: [], notes: [] });
+  state.sel = state.sb.scenes.length - 1;
   renumber(); scheduleSave(); renderScenes(); renderBoardHeader();
+  const ta = $("#detail textarea[data-field='text']"); if (ta) ta.focus();
 }
 function updateHint() {
   const h = $("#next-hint"); if (!h) return;
@@ -122,100 +319,24 @@ function updateHint() {
   if (!st) { h.textContent = ""; return; }
   let msg;
   if (!st.analyzed) msg = "下一步:点「分析」让 Claude 给每镜挑可视化方法。";
-  else if (!state.sb.scenes.some((s) => s.renderedPath)) msg = "下一步:点「全部渲染」出片(或单镜「渲染此条」)。";
+  else if (!state.sb.scenes.some((s) => s.renderedPath)) msg = "下一步:点「全部渲染」出片(或选中镜头「渲染此镜」)。";
   else msg = "下一步:「看整片」检查,或「导出剪辑」交给 Final Cut / DaVinci / 剪映 收尾。";
   h.textContent = "▸ " + msg;
 }
 
-function buildRow(sc, i) {
-  const tr = el("tr");
-  tr.dataset.i = i;
-
-  // # + time
-  const idx = el("td"); const ic = el("div", "idx-cell");
-  ic.appendChild(el("span", "n", "#" + (sc.index ?? i + 1)));
-  ic.appendChild(el("span", "t", `${fmt(sc.startSec)}–${fmt(sc.endSec)}<br>${(sc.durationSec || 0).toFixed(1)}s`));
-  const ctl = el("div", "row-ctl");
-  const rcBtn = (txt, cls, title, fn) => { const b = el("button", "rc" + (cls ? " " + cls : ""), txt); b.title = title; b.addEventListener("click", fn); return b; };
-  ctl.append(rcBtn("↑", "", "上移", () => moveScene(i, -1)), rcBtn("↓", "", "下移", () => moveScene(i, 1)), rcBtn("✕", "rc-del", "删除镜头", () => deleteScene(i)));
-  ic.appendChild(ctl);
-  idx.appendChild(ic); tr.appendChild(idx);
-
-  // text
-  tr.appendChild(cellTextarea("text", sc.text || "", "字幕文本"));
-
-  // method + fallback
-  const mc = el("td"); const wrap = el("div", "method-cell");
-  wrap.appendChild(methodControl("method", sc.method, "方法"));
-  wrap.appendChild(methodControl("fallback", sc.fallback, "备选(需 S 档)"));
-  mc.appendChild(wrap); tr.appendChild(mc);
-
-  // reasoning
-  tr.appendChild(cellTextarea("reasoning", sc.reasoning || "", "理由"));
-
-  // extras: assets chips + transition + motion/style chips
-  const ex = el("td"); const exr = el("div", "extra-row");
-  if (sc.assets && sc.assets.length) { const c = el("div", "chips"); sc.assets.forEach((a) => c.appendChild(el("span", "chip asset", esc(a.split("/").pop())))); exr.appendChild(labeled("资源", c)); }
-  exr.appendChild(labeled("转场", transitionSelect(i, sc.transition)));
-  if (state.designs) exr.appendChild(labeled("风格", scenePresetSelect(i, sc.style)));
-  const badges = el("div", "chips");
-  if (sc.motion && sc.motion.kind && sc.motion.kind !== "still") badges.appendChild(el("span", "chip", "运镜·" + esc(sc.motion.kind)));
-  if (sc.imageStyle) badges.appendChild(el("span", "chip", esc(sc.imageStyle)));
-  if (sc.needsMatting) badges.appendChild(el("span", "chip", "抠像"));
-  if (sc.burnSubtitle) badges.appendChild(el("span", "chip", "烧字幕"));
-  if (sc.style) badges.appendChild(el("span", "chip", "风格·" + esc(sc.style.presetId || "自定义")));
-  const lf = state.lint && state.lint[sc.index];
-  if (lf && lf.length) { const c = el("span", "chip chip-warn", "⚠ 土味 " + lf.length); c.title = lf.map((f) => f.msg).join("\n"); badges.appendChild(c); }
-  if (badges.children.length) exr.appendChild(labeled("修饰", badges));
-  ex.appendChild(exr); tr.appendChild(ex);
-
-  // notes (string[])
-  tr.appendChild(cellTextarea("notes", (sc.notes || []).join("\n"), "备注(每行一条)"));
-
-  // preview + render
-  tr.appendChild(previewCell(sc, i));
-  return tr;
-}
-
-function labeled(label, node) { const w = el("div"); w.appendChild(el("div", "field-label", label)); w.appendChild(node); return w; }
-
-function cellTextarea(field, value, ph) {
-  const td = el("td");
-  const ta = el("textarea"); ta.dataset.field = field; ta.value = value; ta.placeholder = ph || "";
-  ta.addEventListener("input", () => { applyField(td, field, ta.value); scheduleSave(); });
-  td.appendChild(ta); return td;
-}
-function applyField(td, field, value) {
-  const i = +td.parentElement.dataset.i; const sc = state.sb.scenes[i];
-  if (field === "notes") sc.notes = value.split("\n").map((s) => s.trim()).filter(Boolean);
-  else if (field === "reasoning") sc.reasoning = value || null;
-  else sc[field] = value;
-}
-
-function methodControl(field, value, label) {
-  const wrap = el("div");
-  wrap.appendChild(el("div", "field-label", label));
-  let ctrl;
-  if (state.catalog) {
-    ctrl = el("select", "vm-input");
-    ctrl.appendChild(new Option("— 无 —", ""));
-    let has = false;
-    for (const [id, m] of state.catalog) { const o = new Option(`${id} · ${m.label || ""} [${m.engine}/${m.reliability}]`, id); if (id === value) { o.selected = true; has = true; } ctrl.appendChild(o); }
-    if (value && !has) { const o = new Option(value + " (未在 catalog)", value); o.selected = true; ctrl.appendChild(o); }
-  } else {
-    ctrl = el("input", "vm-input"); ctrl.value = value || ""; ctrl.placeholder = "method id";
-  }
-  ctrl.addEventListener("change", () => { const tr = wrap.closest("tr"); state.sb.scenes[+tr.dataset.i][field] = ctrl.value || null; scheduleSave(); });
-  if (ctrl.tagName === "INPUT") ctrl.addEventListener("input", () => { const tr = wrap.closest("tr"); state.sb.scenes[+tr.dataset.i][field] = ctrl.value || null; scheduleSave(); });
-  wrap.appendChild(ctrl); return wrap;
-}
-
-function transitionSelect(i, value) {
-  const s = el("select", "vm-input");
-  for (const t of TRANSITIONS) { const o = new Option(t || "默认(cut)", t); if (t === (value || "")) o.selected = true; s.appendChild(o); }
-  s.addEventListener("change", () => { const sc = state.sb.scenes[i]; if (s.value) sc.transition = s.value; else delete sc.transition; scheduleSave(); });
-  return s;
-}
+// ─── keyboard (board view only, outside form controls) ───
+document.addEventListener("keydown", (e) => {
+  if ($("#board-view").hidden || !state.sb) return;
+  if (e.key === "Escape") return; // lightbox handler owns it
+  const tag = (e.target.tagName || "").toUpperCase();
+  const inForm = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target.isContentEditable;
+  if (document.querySelector("dialog[open]")) return;
+  if (inForm) return;
+  if (e.key === "ArrowUp") { e.preventDefault(); selectScene(Math.max(0, state.sel - 1)); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); selectScene(Math.min(state.sb.scenes.length - 1, state.sel + 1)); }
+  else if (e.key === "Enter") { const ta = $("#detail textarea[data-field='text']"); if (ta) { e.preventDefault(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } }
+  else if (e.key === "r" || e.key === "R") { const sc = selScene(); if (sc && !state.busy) { e.preventDefault(); runOp("render", { only: sc.index }, `渲染镜头 #${sc.index}`); } }
+});
 
 // ─── 整体设计 / 每镜风格 (style presets) ───
 function currentDesignSel() {
@@ -276,31 +397,6 @@ function scenePresetSelect(i, style) {
   return s;
 }
 
-function previewCell(sc, i) {
-  const td = el("td"); const cell = el("div", "preview-cell");
-  const frame = el("div", "pv-frame");
-  if (sc.renderedPath) {
-    const v = el("video"); v.src = fileUrl(sc.renderedPath); v.muted = true; v.loop = true; v.playsInline = true;
-    v.addEventListener("mouseenter", () => v.play().catch(() => {}));
-    v.addEventListener("mouseleave", () => v.pause());
-    v.addEventListener("click", () => lightbox("video", v.src));
-    frame.appendChild(v);
-  } else {
-    const img = sc.assets && sc.assets.find((a) => /\.(png|jpe?g|webp|gif)$/i.test(a));
-    if (img) { const im = el("img"); im.src = fileUrl(img.startsWith("assets/") ? img : "assets/" + img); im.addEventListener("click", () => lightbox("img", im.src)); frame.appendChild(im); }
-    else frame.appendChild(el("div", "pv-empty", "未渲染"));
-  }
-  cell.appendChild(frame);
-  const foot = el("div", "pv-foot");
-  const status = sc.status || (sc.renderedPath ? "rendered" : "pending");
-  const stEl = el("span", "st", stStatusText(status)); stEl.dataset.s = status;
-  foot.appendChild(stEl);
-  const btn = el("button", "render-one", "渲染此条");
-  btn.addEventListener("click", () => runOp("render", { only: sc.index }, `渲染镜头 #${sc.index}`));
-  foot.appendChild(btn);
-  cell.appendChild(foot);
-  td.appendChild(cell); return td;
-}
 function stStatusText(s) { return { pending: "待渲染", rendering: "渲染中", rendered: "已渲染", failed: "失败" }[s] || s; }
 
 // ─── save (debounced PUT of whole storyboard) ───
@@ -364,7 +460,7 @@ async function runOp(op, body, label) {
   else toast(`${label || op} 完成`);
   return ok;
 }
-function setOpsDisabled(d) { document.querySelectorAll(".op, .render-one").forEach((b) => (b.disabled = d)); }
+function setOpsDisabled(d) { document.querySelectorAll(".op, .d-render").forEach((b) => (b.disabled = d)); }
 
 // Merge disk state after a task WITHOUT discarding unsaved local edits. When the
 // board is clean, disk is authoritative (wholesale replace). When there are
@@ -483,7 +579,7 @@ if (finalBtn) finalBtn.addEventListener("click", async () => {
   if (!state.pid || !state.sb) return;
   const scenes = state.sb.scenes || [];
   const allRendered = scenes.length > 0 && scenes.every((s) => s.renderedPath);
-  if (!allRendered) return toast("还有镜头未渲染 — 先「全部渲染」或逐镜「渲染此条」", "error");
+  if (!allRendered) return toast("还有镜头未渲染 — 先「全部渲染」或选中镜头「渲染此镜」", "error");
   // Re-assemble final.mp4 from the rendered scenes (reliable, no re-render), then
   // play. Only play if the stitch actually succeeded — otherwise we'd show a
   // stale final.mp4 from a previous run and pass it off as the new one.
