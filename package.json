@@ -12,6 +12,17 @@
   "bin": {
     "pipeline": "./src/cli.ts"
   },
+  "files": [
+    "src",
+    "schemas",
+    "methods",
+    "templates",
+    "design-presets",
+    "public",
+    "docs",
+    "assets/fonts",
+    "assets/vendor"
+  ],
   "scripts": {
     "plan": "tsx src/cli.ts plan",
     "storyboard": "tsx src/cli.ts storyboard",

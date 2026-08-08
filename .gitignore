@@ -14,10 +14,11 @@ output/
 assets/generated/
 assets/matted/
 
-# Per-project render outputs — large, regenerable binaries
-projects/*/renders/
-projects/*/scenes/
-projects/*/vendor/
+# Per-project working dirs — 每个约 540MB(node_modules + 渲染产物 + 个人字幕稿)。
+# 之前写的是 projects/*/renders/ 和 projects/*/scenes/,而实际路径是
+# projects/*/output/scenes/,规则从未命中;真正挡住大文件的是全局的 output/。
+# 这些是本地素材不是源码,整个目录排除。
+projects/
 
 # Large downloaded reference media (source videos, not project source)
 input/ref/
