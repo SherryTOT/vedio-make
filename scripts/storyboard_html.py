@@ -1,62 +1,36 @@
 #!/usr/bin/env python3
 """Build a VISUAL storyboard: one reference thumbnail per beat + narration +
 recommended engine/method. Output: output/storyboard.html (open in browser).
+
+Usage: python3 scripts/storyboard_html.py <reference.mp4> [plan.json]
+Run scripts/beats.py first (reads output/beats.json).
+
+plan.json (optional) = {"title", "subtitle", "overrides": [[start, end, tag, note], ...],
+                        "broll": [[start, end], ...]}
 """
 import json
 import os
 import subprocess
+import sys
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MP4 = os.path.join(HERE, "input", "ref", "BV1hN596zEas.mp4")
-BEATS = json.load(open(os.path.join(HERE, "output", "beats.json")))
+if len(sys.argv) < 2:
+    sys.exit(__doc__)
+
+MP4 = sys.argv[1]
+PLAN = json.load(open(sys.argv[2], encoding="utf-8")) if len(sys.argv) > 2 else {}
+BEATS = json.load(open(os.path.join(HERE, "output", "beats.json"), encoding="utf-8"))
 FRAMES_DIR = os.path.join(HERE, "output", "storyboard-frames")
 OUT = os.path.join(HERE, "output", "storyboard.html")
 os.makedirs(FRAMES_DIR, exist_ok=True)
 
-# Treatment overrides from PICTURE-MAP Layer B: (start, end, tag, note).
+# Treatment overrides (PICTURE-MAP Layer B): [start, end, tag, note].
 # tag ∈ kou(口播) hf rm cust(定制) cut(删) bro(占位).  Default = kou.
-OV = [
-    (0, 8, "hf", "片头标题卡:5国名击出+红脉冲 hf-kinetic-text"),
-    (39, 54, "hf", "概念卡「华盛顿共识 1989/金融自由化」"),
-    (130, 159, "cust", "资本套利示意:美3%→墨5% 锚定挂钩(SVG资本流)"),
-    (159, 173, "rm", "R1 墨西哥GDP/外资流入折线 1990-94"),
-    (173, 203, "rm", "R2 美联储利率折线 1990-95"),
-    (233, 265, "rm", "R3 比索/美元崩盘折线 +大数字-40%"),
-    (285, 316, "hf", "大数字 $500亿 IMF救助 + IMF logo(素材)"),
-    (316, 350, "hf", "章节卡「资本的魔力」+ 道德风险概念图"),
-    (366, 394, "rm", "R4 亚洲各国GDP增速柱状"),
-    (407, 454, "rm", "R5 日资占各国外债比柱状"),
-    (529, 544, "hf", "大数字 $2300亿 日本坏账"),
-    (557, 575, "rm", "R6 泰国SET指数1996折线(跌段红)"),
-    (575, 589, "hf", "章节卡「正面进攻/空头狙击」"),
-    (589, 649, "cust", "空头狙击四步流程示意(SVG,可复用)"),
-    (634, 649, "rm", "R7 英镑/马克黑色星期三折线 +大数字$18亿"),
-    (679, 730, "cut", "❌雅诗兰黛520广告 整段删除(beats48-51)"),
-    (832, 866, "cust", "两股资本流向泰国:日资撤↘+空头涌入↗(SVG)"),
-    (866, 911, "hf", "大数字组 泰国外储<400/270/80亿"),
-    (930, 942, "hf", "事件卡 1997.5 高盛报告(截图素材)"),
-    (958, 973, "hf", "大数字 1500% 拆借利率(冲击放大)"),
-    (973, 1003, "hf", "大数字 $10亿/$30亿 大决战"),
-    (1003, 1033, "cust", "★1997.7.2泰铢脱钩·东南亚连环(复用地球仪范式)"),
-    (1033, 1049, "rm", "R9 各国货币贬幅柱状 菲-40/马-46/印尼-80%"),
-    (1069, 1077, "hf", "大数字 $600亿+ 港府弹药"),
-    (1077, 1107, "cust", "★18:23 多米诺传染地球仪 ✅已完成"),
-    (1107, 1138, "hf", "大数字300% + R10恒生10月崩盘折线"),
-    (1179, 1194, "hf", "大数字组 IMF救韩$570亿/总$1180亿"),
-    (1256, 1316, "cust", "香港保卫战高潮 + R11港股爆量柱(8/28=790亿20x)"),
-    (1332, 1345, "rm", "R12 恒生1998-2000回升折线 →17000+"),
-    (1345, 1376, "hf", "事件卡 休克疗法/GKO + 概念示意"),
-    (1376, 1420, "rm", "R13 GKO利率→150%/油价折线"),
-    (1420, 1440, "hf", "事件卡 1998.8.17 俄违约"),
-    (1440, 1466, "rm", "R14 GKO面值10-15%/LTCM/巴西/油价<$11"),
-    (1466, 1482, "hf", "章节卡「资本的流动/影响」"),
-    (1525, 1555, "rm", "R15 失业人数柱状 泰>200万/印尼>2000万"),
-    (1571, 1602, "cust", "★资本流动主线总回顾(墨→东南亚→东亚→俄→巴西)"),
-    (1694, 1719, "hf", "收尾呼应 + 片尾卡「谢谢观看」"),
-]
-
-# B-roll placeholder windows (政要/交易所/人群) — coarse, from contact sheets.
-BRO = [(218, 233), (454, 529), (760, 832), (1138, 1179), (1602, 1694)]
+OV = [tuple(o) for o in PLAN.get("overrides", [])]
+# B-roll placeholder windows [start, end] — coarse, from contact sheets.
+BRO = [tuple(b) for b in PLAN.get("broll", [])]
+TITLE = PLAN.get("title", f"分镜故事板 · {os.path.basename(MP4)} · {len(BEATS)} 节拍")
+SUBTITLE = PLAN.get("subtitle", "每节拍 = 原片代表帧 + 旁白 + 推荐引擎/做法。确认前不渲染。")
 
 LABEL = {"kou": ("口播·保留原片", "#6b7280"), "hf": ("HyperFrames", "#3b6fe0"),
          "rm": ("Remotion·需数据", "#1f9d57"), "cust": ("定制 3D/SVG", "#8b46d6"),
@@ -106,7 +80,7 @@ for i, b in enumerate(BEATS):
 </div></div>''')
 
 html = f'''<!doctype html><html lang="zh"><head><meta charset="utf-8">
-<title>分镜故事板 — 亚洲金融危机 BV1hN596zEas</title>
+<title>{TITLE}</title>
 <style>
  body{{margin:0;background:#0d0f14;color:#e9eaf0;font-family:"PingFang SC",system-ui,sans-serif}}
  header{{position:sticky;top:0;background:#12151c;padding:14px 24px;border-bottom:1px solid #262b36;z-index:9}}
@@ -124,8 +98,8 @@ html = f'''<!doctype html><html lang="zh"><head><meta charset="utf-8">
  .nar{{font-size:14px;line-height:1.6;color:#cfd3dd}}
  .rec{{margin-top:8px;font-size:13px;color:#8fd6a8;font-weight:600}}
 </style></head><body>
-<header><h1>分镜故事板 · 《一口气了解亚洲金融危机》28:39 · 122 节拍</h1>
-<div class="sub">每节拍 = 原片代表帧 + 旁白(faster-whisper 转写) + 推荐引擎/做法。确认前不渲染。</div>
+<header><h1>{TITLE}</h1>
+<div class="sub">{SUBTITLE}</div>
 <div class="legend">
  <span><i class="dot" style="background:#6b7280"></i>口播·保留原片</span>
  <span><i class="dot" style="background:#3b6fe0"></i>HyperFrames(章节卡/大数字/片头尾)</span>

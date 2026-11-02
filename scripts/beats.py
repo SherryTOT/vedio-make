@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""Group the 1175 transcript segments into reviewable narrative BEATS.
+"""Group transcript segments into reviewable narrative BEATS.
+
+Usage: python3 scripts/beats.py <transcript.json> [chapters.json]
+
+transcript.json = {"segments": [{"start", "end", "text"}, ...]} (e.g. faster-whisper output).
+chapters.json   = optional [[start_sec, end_sec, "name"], ...] from a visual contact-sheet pass;
+                  without it the whole video is one chapter.
 
 Boundary = silence gap >= 1.0s, OR running beat duration >= 16s, OR a chapter
-boundary (from the visual contact-sheet analysis). Emits beats.json + a compact
-console listing (time | text) grouped by chapter for building PICTURE-MAP B.
+boundary. Emits output/beats.json + a compact console listing (time | text)
+grouped by chapter for building PICTURE-MAP B.
 """
 import json
 import os
+import sys
+
+if len(sys.argv) < 2:
+    sys.exit(__doc__)
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SEGS = json.load(open(os.path.join(HERE, "output", "BV1hN596zEas.transcript.json")))["segments"]
-
-# Chapter boundaries (sec) — approx from contact-sheet visual structure S0..S7.
-CHAPTERS = [
-    (0,    8,    "S0 片头"),
-    (8,    285,  "S1 背景·亚洲奇迹/墨西哥龙舌兰危机"),
-    (285,  575,  "S2 资本涌入·泰国泡沫「资本的魔力」"),
-    (575,  865,  "S3 索罗斯狙击泰铢「正面进攻/空头狙击」"),
-    (865,  1150, "S4 危机扩散·韩国「多米诺骨牌 97-99」"),
-    (1150, 1440, "S5 香港保卫战 + 俄罗斯 GKO 违约"),
-    (1440, 1730, "S6 总结·影响「资本的流动」"),
-    (1730, 9999, "S7 片尾"),
-]
+SEGS = json.load(open(sys.argv[1], encoding="utf-8"))["segments"]
+CHAPTERS = ([tuple(c) for c in json.load(open(sys.argv[2], encoding="utf-8"))]
+            if len(sys.argv) > 2 else [(0, float("inf"), "全片")])
 
 def chap(t):
     for a, b, name in CHAPTERS:
@@ -52,7 +52,8 @@ for s in SEGS:
         cur["end"] = s["end"]
         cur["text"] += s["text"]
 
-json.dump(beats, open(os.path.join(HERE, "output", "beats.json"), "w"),
+os.makedirs(os.path.join(HERE, "output"), exist_ok=True)
+json.dump(beats, open(os.path.join(HERE, "output", "beats.json"), "w", encoding="utf-8"),
           ensure_ascii=False, indent=1)
 
 def mmss(t):
