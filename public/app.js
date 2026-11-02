@@ -1,5 +1,10 @@
 const $ = (s) => document.querySelector(s);
-const TOKEN = window.__PIPELINE_TOKEN__ || new URLSearchParams(location.search).get("token") || "";
+const TOKEN = window.__PIPELINE_TOKEN__ || new URLSearchParams(location.hash.slice(1)).get("token") || new URLSearchParams(location.search).get("token") || (window.__PIPELINE_AUTH_REQUIRED__ ? window.prompt("请输入服务端终端显示的访问令牌") : "") || "";
+// Credentials supplied in a link should not remain in browser history/referrers.
+if (TOKEN && (location.search.includes("token=") || location.hash.includes("token="))) {
+  const clean = new URL(location.href); clean.searchParams.delete("token"); clean.hash = "";
+  history.replaceState(null, "", clean);
+}
 const AUTH = TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
 
 // transition ids the renderer understands ("" = 默认 cut)

@@ -393,18 +393,18 @@ const STATIC_MIME: Record<string, string> = {
 };
 
 /** Serve index.html with the bearer token injected, so the same-origin page can call /api/*. */
-function serveIndexHtml(res: http.ServerResponse, token: string): void {
+function serveIndexHtml(res: http.ServerResponse, token: string | null): void {
   const idx = path.join(PUBLIC_DIR, "index.html");
   if (!fs.existsSync(idx)) return sendJson(res, 404, { error: "UI not built (public/index.html missing)" });
   const html = fs
     .readFileSync(idx, "utf8")
-    .replace("</head>", `<script>window.__PIPELINE_TOKEN__=${JSON.stringify(token || "")}</script></head>`);
+    .replace("</head>", `<script>window.__PIPELINE_TOKEN__=${JSON.stringify(token || "").replace(/</g, "\\u003c")};window.__PIPELINE_AUTH_REQUIRED__=${token !== ""}</script></head>`);
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
   res.end(html);
 }
 
 /** Static file server for public/ — no auth (the page must boot before it has a token). */
-function serveStatic(res: http.ServerResponse, pathname: string, token: string): void {
+function serveStatic(res: http.ServerResponse, pathname: string, token: string | null): void {
   let rel = decodeURIComponent(pathname);
   if (rel === "/" || rel === "") return serveIndexHtml(res, token);
   const abs = path.resolve(PUBLIC_DIR, "." + rel);
@@ -478,6 +478,8 @@ export async function startServer(opts: {
   token: string;
   projectsDir: string;
 }): Promise<http.Server> {
+  const localOnly = ["127.0.0.1", "::1", "localhost"].includes(opts.host.toLowerCase());
+  if (!localOnly && !opts.token) throw new Error("局域网访问必须设置访问令牌");
   projectsRoot = opts.projectsDir;
   loadProjects();
 
@@ -499,7 +501,7 @@ export async function startServer(opts: {
 
       // Static UI (public/) — served WITHOUT auth so the page can boot; /api/* stays gated below.
       if (req.method === "GET" && !url.pathname.startsWith("/api/")) {
-        return serveStatic(res, url.pathname, opts.token);
+        return serveStatic(res, url.pathname, localOnly ? opts.token : null);
       }
 
       // Auth gate
