@@ -10,7 +10,8 @@ test('LAN pages do not disclose the API token; local pages retain automatic logi
   const dir = mkdtempSync(join(tmpdir(), 'vedio-auth-'));
   const token = 'test-secret-that-must-not-be-public';
   try {
-    await assert.rejects(startServer({ port: 0, host: '0.0.0.0', token: '', projectsDir: dir }));
+    // If a regression lets this start, close it so the test fails instead of hanging on the open socket.
+    await assert.rejects(startServer({ port: 0, host: '0.0.0.0', token: '', projectsDir: dir }).then(s => { s.close(); return s; }));
     for (const host of ['0.0.0.0', '127.0.0.1']) {
       const server = await startServer({ port: 0, host, token, projectsDir: dir });
       try {
