@@ -6,6 +6,11 @@ import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { startServer } from './server.js';
 
+// startServer prints a startup banner to stdout; under `node --test` that output can interleave with the
+// runner's serialized result stream and fail the whole file ("Unable to deserialize cloned data"). Each test
+// file runs in its own process, so muting console.log here affects nothing else.
+console.log = () => {};
+
 test('LAN pages do not disclose the API token; local pages retain automatic login', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'vedio-auth-'));
   const token = 'test-secret-that-must-not-be-public';
