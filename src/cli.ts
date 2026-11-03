@@ -87,7 +87,8 @@ function usage(): never {
   const searchProvs = listProviders("search").join(" | ");
   console.error(`Usage:
   pipeline plan <subtitle.srt> [--title T] [--width 1920] [--height 1080] [--fps 30] [--out output/storyboard.json]
-  pipeline analyze   [--in JSON] [--provider <${chatProvs}>] [--fill-only]
+  pipeline analyze   [--in JSON] [--provider <${chatProvs}>] [--fill-only] [--offline]
+                     (--offline:不调 LLM,按规则给空方法填安全的文字方法,零 key 可用)
   pipeline edit      "<instruction>" [--in JSON] [--provider <${chatProvs}>] [--dry-run] [--yes]
   pipeline approve   [--in JSON]   (mark stages.approved = true; render gates on this)
   pipeline storyboard [--in JSON] [--out HTML]
@@ -179,6 +180,15 @@ async function main() {
       console.error(`Storyboard JSON not found: ${inPath}`);
       console.error(`Run 'pipeline plan <subtitle.srt>' first.`);
       process.exit(1);
+    }
+    if (flags.offline) {
+      const { applyOfflinePicks } = await import("./analyze-offline.ts");
+      const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
+      const n = applyOfflinePicks(sb);
+      fs.writeFileSync(inPath, JSON.stringify(sb, null, 2));
+      console.log(`✓ 离线选方法(无 LLM):填了 ${n} 个镜头,已有方法的镜头未改 → ${inPath}`);
+      console.log(`  Next: pipeline approve && pipeline render`);
+      return;
     }
     await runAnalyze({
       storyboardPath: inPath,
