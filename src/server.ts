@@ -74,6 +74,8 @@ interface Task {
 }
 
 const tasks = new Map<string, Task>();
+/** Abort handle per running task (kept out of Task so it never ends up in a JSON response). */
+const taskAborts = new Map<string, AbortController>();
 const taskEvents = new EventEmitter();
 taskEvents.setMaxListeners(50);
 
@@ -289,6 +291,7 @@ async function runTaskBody(t: Task, body: any): Promise<void> {
         } catch {}
       }
       await runRender({
+        signal: taskAborts.get(t.id)?.signal,
         storyboardPath: sbPath,
         outputDir: path.join(proj.dir, "output"),
         projectRoot: proj.dir,
@@ -305,6 +308,7 @@ async function runTaskBody(t: Task, body: any): Promise<void> {
     case "stitch":
       // Re-assemble final.mp4 from already-rendered scenes — no re-render.
       await runRender({
+        signal: taskAborts.get(t.id)?.signal,
         storyboardPath: sbPath,
         outputDir: path.join(proj.dir, "output"),
         projectRoot: proj.dir,
@@ -348,6 +352,7 @@ async function dispatchTask(t: Task, body: any): Promise<void> {
     return;
   }
   setStatus(t, "running");
+  taskAborts.set(t.id, new AbortController());
   try {
     await captureLogs(t, () => runTaskBody(t, body));
     if (t.cancelRequested) {
@@ -358,7 +363,11 @@ async function dispatchTask(t: Task, body: any): Promise<void> {
     }
   } catch (e) {
     const err = (e as Error).message ?? String(e);
-    setStatus(t, "failed", "task failed", err);
+    // The subprocess was killed because the user cancelled — that is a cancel, not a failure.
+    if (t.cancelRequested) setStatus(t, "cancelled", "已取消(已终止正在运行的进程)");
+    else setStatus(t, "failed", "task failed", err);
+  } finally {
+    taskAborts.delete(t.id);
   }
 }
 
@@ -737,6 +746,7 @@ export async function startServer(opts: {
         if (req.method === "GET" && sub === "") return sendJson(res, 200, t);
         if (req.method === "POST" && sub === "/cancel") {
           t.cancelRequested = true;
+          taskAborts.get(t.id)?.abort(); // kills the running render's process group (proc.ts)
           return sendJson(res, 200, { ok: true });
         }
         if (req.method === "GET" && sub === "/events") {

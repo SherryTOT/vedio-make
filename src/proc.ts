@@ -29,6 +29,16 @@ export interface RunOpts {
   onLine?: (line: string) => void;
   /** Extra env on top of process.env. */
   env?: NodeJS.ProcessEnv;
+  /** Abort → terminate the whole process group (task cancel). Rejects with a CancelledError. */
+  signal?: AbortSignal;
+}
+
+/** Thrown when a run is aborted via RunOpts.signal (the user cancelled the task). */
+export class CancelledError extends Error {
+  constructor(label: string) {
+    super(`${label} 已取消`);
+    this.name = "CancelledError";
+  }
 }
 
 /** Grace period between SIGTERM and SIGKILL when a timeout fires. */
@@ -59,6 +69,7 @@ export function run(cmd: string, args: string[], opts: RunOpts): Promise<void> {
   const cwdRel = path.relative(process.cwd(), opts.cwd) || ".";
 
   return new Promise<void>((resolve, reject) => {
+    if (opts.signal?.aborted) return reject(new CancelledError(label));
     const sink = opts.onLine ?? ((l: string) => process.stdout.write(l + "\n"));
     sink(`[run] ${cmd} ${args.join(" ")}  (cwd=${cwdRel})`);
 
@@ -71,6 +82,7 @@ export function run(cmd: string, args: string[], opts: RunOpts): Promise<void> {
 
     const tail: string[] = [];
     let timedOut = false;
+    let cancelled = false;
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
 
@@ -100,9 +112,21 @@ export function run(cmd: string, args: string[], opts: RunOpts): Promise<void> {
           }, opts.timeoutMs)
         : undefined;
 
+    const onAbort = () => {
+      cancelled = true;
+      if (!child.pid) return;
+      sink(`[run] ✋ ${label} cancelled — terminating process group`);
+      killGroup(child.pid, "SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.pid) killGroup(child.pid, "SIGKILL");
+      }, KILL_GRACE_MS);
+    };
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+
     const cleanup = () => {
       if (watchdog) clearTimeout(watchdog);
       if (killTimer) clearTimeout(killTimer);
+      opts.signal?.removeEventListener("abort", onAbort);
     };
 
     child.on("error", (err) => {
@@ -116,6 +140,10 @@ export function run(cmd: string, args: string[], opts: RunOpts): Promise<void> {
       if (settled) return;
       settled = true;
       cleanup();
+      // The leader exiting on SIGTERM would otherwise cancel the SIGKILL follow-up and leave
+      // descendants (chrome, ffmpeg) running — sweep the group once more.
+      if ((cancelled || timedOut) && child.pid) killGroup(child.pid, "SIGKILL");
+      if (cancelled) return reject(new CancelledError(label));
       if (timedOut) {
         return reject(
           new Error(`${label} 超时(>${Math.round((opts.timeoutMs ?? 0) / 1000)}s)已被终止。` + tailMsg(tail)),

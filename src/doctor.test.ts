@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { parseFfmpegFilters, ffmpegChecks, keyChecks, engineChecks, findNpxPackage, nodeCheck, summarize } from "./doctor.ts";
 import { hasProviderKey } from "./providers/shared.ts";
+import { remotionCacheDir } from "./render.ts";
 
 // Trimmed `ffmpeg -filters` output from a build WITHOUT libass/drawtext (the Homebrew-minimal case).
 const LISTING = `Filters:
@@ -64,6 +65,7 @@ test("engine cache: finds the pinned hyperframes in the npx cache; absent cache 
   fs.mkdirSync(path.dirname(pj), { recursive: true });
   fs.writeFileSync(pj, JSON.stringify({ name: "hyperframes", version: "0.6.7" }));
   fs.mkdirSync(path.join(home, ".cache", "puppeteer", "chrome-headless-shell"), { recursive: true });
+  fs.mkdirSync(path.join(remotionCacheDir(path.join(home, ".cache", "vedio-make")), "node_modules", "remotion"), { recursive: true });
   assert.equal(findNpxPackage("hyperframes@0.6.7", path.join(home, ".npm", "_npx")), path.dirname(pj));
   assert.equal(findNpxPackage("hyperframes@0.5.7", path.join(home, ".npm", "_npx")), null);
   c = engineChecks(home);
