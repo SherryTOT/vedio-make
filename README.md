@@ -35,7 +35,7 @@ npm run serve          # daemon 起在 http://127.0.0.1:8766/
 
 1. `npm run serve`,新建项目粘贴 SRT(`plan` 只做解析,不需 key)
 2. 在分镜台里给每镜手动选 `method`(下拉里都是已实现的方法)
-3. **配音**用免费的 Edge 音色(无 MiniMax key 时自动降级到 Edge,零成本)
+3. **配音**用免费的 Edge 音色(无 MiniMax key 时自动降级到 Edge,零成本);Edge 握手被微软拒绝时,macOS 上再自动降级到系统自带音色(`say`,离线,草片占位用)
 4. **全部渲染** → HyperFrames / Remotion / ffmpeg 全部本地、免费
 
 配图(图库/生成)和「分析」需要 provider key,见下。
@@ -48,7 +48,7 @@ npm run serve          # daemon 起在 http://127.0.0.1:8766/
 2. `~/.video-toolkit/providers.json`(`{ "providers": [{ "id": "minimax", "base_url": "…", "api_key": "…", "model": "…" }] }`)
 3. macOS Keychain(service `com.restate.mac`,account = provider id)
 
-仓库内**不含任何 key**。缺 key 时相关命令会报清楚缺哪个、去哪配。免费兜底:配音有 Edge,回退链会在主 provider 失败时自动降级并记一条决策日志(`output/decisions.json`)。
+仓库内**不含任何 key**。缺 key 时相关命令会报清楚缺哪个、去哪配。免费兜底:配音有 Edge,macOS 上再兜底到系统音色;回退链会在主 provider 失败时自动降级并记一条决策日志(`output/decisions.json`)。
 
 ## CLI(`pipeline <cmd>` 或 `npx tsx src/cli.ts <cmd>`)
 
