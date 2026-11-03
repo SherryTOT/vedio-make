@@ -53,6 +53,8 @@ let RENDER_IO: { onLine?: (line: string) => void } = {};
 
 // Watchdog timeouts. A render that stalls (e.g. on an un-vendored CDN) is
 // killed instead of hanging for minutes. Overridable via env for slow hosts.
+/** HyperFrames build every scene renders with (doctor checks it is npx-cached). See renderHyperFramesScene for why 0.6.x. */
+export const HYPERFRAMES_PKG = "hyperframes@0.6.7";
 const HF_TIMEOUT_MS = Number(process.env.PIPELINE_HF_TIMEOUT_MS) || 8 * 60_000;
 const RM_TIMEOUT_MS = Number(process.env.PIPELINE_RM_TIMEOUT_MS) || 12 * 60_000;
 const FFMPEG_TIMEOUT_MS = Number(process.env.PIPELINE_FFMPEG_TIMEOUT_MS) || 10 * 60_000;
@@ -155,7 +157,7 @@ async function renderHyperFramesScene(
   // 0.6.x embeds them per the documented fonts/ + @font-face mechanism.
   await sh(
     "npx",
-    ["--yes", "hyperframes@0.6.7", "render", "--output", path.resolve(outMp4)],
+    ["--yes", HYPERFRAMES_PKG, "render", "--output", path.resolve(outMp4)],
     sceneDir,
     HF_TIMEOUT_MS,
     `hyperframes 渲染 ${path.basename(sceneDir)}`

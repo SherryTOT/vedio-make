@@ -109,6 +109,7 @@ function usage(): never {
   pipeline translate <lang>  [--in JSON] [--source <lang>] [--provider] [--force]
   pipeline render    [--in JSON] [--only N] [--force] [--workers 2] [--stitch] [--estimate]
   pipeline validate  [--in JSON]   (渲染前结构校验 + 幻灯片风险评分;有致命问题退出码 1)
+  pipeline doctor    [--offline]   (检查 ffmpeg 滤镜 / 引擎缓存 / Edge 与 provider 连通 / key 有无;--offline 跳过联网项)
   pipeline review    [--in JSON]   (渲染后自检 final.mp4:ffprobe + 抽帧 + 音频;写 output/qa-report.json)
   pipeline cost      [--in JSON] [--tts p] [--image p] [--music p]   (数量级成本预估;免费 provider 计 $0)
   pipeline serve     [--port 8766] [--host 127.0.0.1] [--token <bearer>] [--projects ./projects]
@@ -550,6 +551,13 @@ async function main() {
     for (const [k, d] of Object.entries(risk.dimensions)) console.log(`  · ${k} [${d.score.toFixed(1)}] ${d.reason}`);
     console.log(errors.length ? `\n✗ 校验未通过:${errors.length} 个致命问题` : `\n✓ 结构校验通过${warnings.length ? `(${warnings.length} 条提醒)` : ""}`);
     process.exit(errors.length ? 1 : 0);
+  }
+
+  if (cmd === "doctor") {
+    const { runDoctor, summarize } = await import("./doctor.ts");
+    const { exitCode, text } = summarize(await runDoctor({ network: !rest.includes("--offline") }));
+    console.log(text);
+    process.exit(exitCode);
   }
 
   if (cmd === "review") {

@@ -65,6 +65,7 @@ npm run serve          # daemon 起在 http://127.0.0.1:8766/
 | `translate <lang>` | 整片翻译 |
 | `render [--only N] [--force] [--workers 2] [--stitch] [--estimate]` | 逐镜渲染 + 拼接 `final.mp4` |
 | `validate` / `review` / `cost` | 渲前结构校验+幻灯片风险 / 渲后自检 / 成本预估 |
+| `doctor [--offline]` | 环境体检:ffmpeg 滤镜、引擎缓存、Edge 与 provider 连通、key 有无(只报有无,不打印) |
 | `serve --projects ./projects [--port] [--token]` | 起网页分镜台 daemon |
 
 单镜快迭代:`pipeline render --only 3`;只重拼不重渲:`pipeline render --stitch`。
