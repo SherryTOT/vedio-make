@@ -1,10 +1,10 @@
 # OPUS-BRIEF.md — 执行任务书(给 Opus 会话的开工文件)
 
-> 你是本项目的执行工程师。使命:按 [MOTION.md](MOTION.md)(怎么动)与 [DIRECTION.md](DIRECTION.md)(选什么/验收什么)把 Vedio Make 升级到「极客湾/小Lin说级动效」,并保证今后用你(Opus)做片也稳定过线。
+> 你是本项目的执行工程师。使命:按 [MOTION.md](../MOTION.md)(怎么动)与 [DIRECTION.md](../DIRECTION.md)(选什么/验收什么)把 Vedio Make 升级到「极客湾/小Lin说级动效」,并保证今后用你(Opus)做片也稳定过线。
 > 凡法典有明确规定的,照做,不发挥;想放宽法典 = 停下来问用户。
 
 ## 开工必读(顺序)
-1. `HANDOFF.md`(项目现状与坑,尤其 §0 印刷工坊、§4 易踩坑)
+1. `docs/internal/HANDOFF.md`(项目现状与坑,尤其 §0 印刷工坊、§4 易踩坑)
 2. `docs/MOTION.md` + `docs/DIRECTION.md`(两部法典,你的执行标准)
 3. `methods/catalog.json`(方法目录与引擎决策矩阵)
 

@@ -80,12 +80,12 @@ function parseFlags(argv: string[]): Record<string, string | boolean> {
   return flags;
 }
 
-function usage(): never {
+function usageText(): string {
   const chatProvs = listProviders("chat").join(" | ");
   const ttsProvs = listProviders("tts").join(" | ");
   const imageProvs = listProviders("image").join(" | ");
   const searchProvs = listProviders("search").join(" | ");
-  console.error(`Usage:
+  return `Usage:
   pipeline plan <subtitle.srt> [--title T] [--width 1920] [--height 1080] [--fps 30] [--out output/storyboard.json]
   pipeline analyze   [--in JSON] [--provider <${chatProvs}>] [--fill-only] [--offline]
                      (--offline:不调 LLM,按规则给空方法填安全的文字方法,零 key 可用)
@@ -114,13 +114,37 @@ function usage(): never {
   pipeline review    [--in JSON]   (渲染后自检 final.mp4:ffprobe + 抽帧 + 音频;写 output/qa-report.json)
   pipeline cost      [--in JSON] [--tts p] [--image p] [--music p]   (数量级成本预估;免费 provider 计 $0)
   pipeline serve     [--port 8766] [--host 127.0.0.1] [--token <bearer>] [--projects ./projects]
-`);
+`;
+}
+
+function usage(): never {
+  console.error(usageText());
   process.exit(1);
+}
+
+/** `help <cmd>`: just that command's usage line(s), including its indented continuation lines. */
+function helpFor(text: string, cmd: string): string | null {
+  const lines = text.split("\n");
+  const i = lines.findIndex((l) => new RegExp(`^  pipeline ${cmd.replace(/[^a-z-]/g, "")}(\\s|$)`).test(l));
+  if (i < 0) return null;
+  const out = [lines[i]];
+  for (let j = i + 1; j < lines.length && /^\s{4,}\S/.test(lines[j]) && !/^  pipeline /.test(lines[j]); j++) out.push(lines[j]);
+  return out.join("\n");
 }
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd) usage();
+  if (cmd === "--help" || cmd === "-h" || cmd === "help") {
+    if (cmd === "help" && rest[0]) {
+      const one = helpFor(usageText(), rest[0]);
+      if (!one) { console.error(`没有这个命令: ${rest[0]}\n`); console.error(usageText()); process.exit(1); }
+      console.log(one);
+    } else {
+      console.log(usageText());
+    }
+    process.exit(0);
+  }
 
   // --in pins the project: outputs (and the stale-artifact prune after a render) must go next to that
   // storyboard, not into whatever directory the command happens to be run from.
