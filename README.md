@@ -8,7 +8,7 @@ Claude 当大脑(给每条字幕挑可视化方法),CLI 当肌肉(解析 SRT、�
 
 - **Node ≥ 18**(用 `tsx` 直接跑 TypeScript,无构建步骤)
 - 本机装好 **`ffmpeg`**(拼接 / 混音 / 抽帧自检都靠它)
-- 渲染引擎 **HyperFrames / Remotion** 通过 `npx --yes` 按需拉取(首次联网,之后走缓存)
+- 渲染引擎 **HyperFrames / Remotion** 通过 `npx --yes` 按需拉取(首次联网,之后走缓存)。**首次渲染要下载约 700 MB**(HyperFrames 约 170 MB + 无头 Chrome 约 530 MB);`pipeline doctor` 可先查环境与缓存
 - 运行时**零 npm 依赖**;`npm install` 只装 devDeps(`tsx` / `typescript`)
 
 ```bash
@@ -37,6 +37,16 @@ npm run serve          # daemon 起在 http://127.0.0.1:8766/
 2. 在分镜台里给每镜手动选 `method`(下拉里都是已实现的方法)
 3. **配音**用免费的 Edge 音色(无 MiniMax key 时自动降级到 Edge,零成本);Edge 握手被微软拒绝时,macOS 上再自动降级到系统自带音色(`say`,离线,草片占位用)
 4. **全部渲染** → HyperFrames / Remotion / ffmpeg 全部本地、免费
+
+纯 CLI 版(同样零 key,方法由离线规则自动填:短句 → 动态大字,长句 → 淡入字幕):
+
+```bash
+npx tsx src/cli.ts plan input/sample.srt --title 试一下
+npx tsx src/cli.ts analyze --offline
+npx tsx src/cli.ts approve
+npx tsx src/cli.ts tts        # Edge 不可用时 macOS 自动降级到系统音色
+npx tsx src/cli.ts render     # → output/final.mp4
+```
 
 配图(图库/生成)和「分析」需要 provider key,见下。
 
