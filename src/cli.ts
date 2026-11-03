@@ -18,7 +18,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { findProjectRoot, catalogPathFor } from "./project-root.ts";
 import { runPlan } from "./plan.ts";
 import { writeStoryboardHtml } from "./storyboard.ts";
 import { runRender } from "./render.ts";
@@ -39,22 +39,6 @@ import { startServer } from "./server.ts";
 import crypto from "node:crypto";
 import { getTts, listProviders } from "./providers/registry.ts";
 
-function findProjectRoot(start: string): string {
-  let cur = start;
-  for (let i = 0; i < 8; i++) {
-    const pkg = path.join(cur, "package.json");
-    if (fs.existsSync(pkg)) {
-      try {
-        const data = JSON.parse(fs.readFileSync(pkg, "utf8"));
-        if (data.name === "video-pipeline") return cur;
-      } catch {}
-    }
-    const parent = path.dirname(cur);
-    if (parent === cur) break;
-    cur = parent;
-  }
-  return path.dirname(fileURLToPath(import.meta.url)).replace(/\/src$/, "");
-}
 
 /**
  * Read a numeric flag with a default, failing LOUDLY on a non-number instead of
@@ -136,8 +120,11 @@ async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd) usage();
 
-  const root = findProjectRoot(process.cwd());
-  const catalogPath = path.join(root, "methods", "catalog.json");
+  // --in pins the project: outputs (and the stale-artifact prune after a render) must go next to that
+  // storyboard, not into whatever directory the command happens to be run from.
+  const inArg = rest[rest.indexOf("--in") + 1];
+  const root = findProjectRoot(rest.includes("--in") && inArg ? path.dirname(path.resolve(process.cwd(), inArg)) : process.cwd());
+  const catalogPath = catalogPathFor(root);
 
   if (cmd === "plan") {
     const positional = rest.filter((a) => !a.startsWith("--"));
@@ -167,7 +154,7 @@ async function main() {
 
   if (cmd === "storyboard") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     const outPath = path.resolve(root, (flags.out as string) || "output/storyboard.html");
     if (!fs.existsSync(inPath)) {
       console.error(`Storyboard JSON not found: ${inPath}`);
@@ -182,7 +169,7 @@ async function main() {
 
   if (cmd === "analyze") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     const designPath = path.resolve(root, "design.md");
     const assetsDir = path.resolve(root, "assets");
     const fillOnly = Boolean(flags["fill-only"]);
@@ -210,7 +197,7 @@ async function main() {
     const flags = parseFlags(rest);
     const instruction = positional.join(" ").trim();
     if (!instruction) { console.error(`edit: instruction required (in quotes)`); process.exit(1); }
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
     await runEdit({
       instruction,
@@ -225,7 +212,7 @@ async function main() {
 
   if (cmd === "approve") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
     const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
     sb.stages = { ...(sb.stages ?? {}), approved: true };
@@ -241,7 +228,7 @@ async function main() {
 
   if (cmd === "research") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     const force = Boolean(flags.force);
     const searchProvider = flags.provider as string | undefined;
     const chatProvider = flags["chat-provider"] as string | undefined;
@@ -252,7 +239,7 @@ async function main() {
 
   if (cmd === "images") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     const assetsDir = path.resolve(root, "assets");
     const force = Boolean(flags.force);
     const rawPrompts = Boolean(flags.raw);
@@ -283,7 +270,7 @@ async function main() {
     const provider = (flags.provider as string) || "mytokk";
     const aspect = flags.aspect as "1:1" | "3:4" | "9:16" | "16:9" | "4:3" | undefined;
     const force = Boolean(flags.force);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     let prompts: string[] = [];
     if (typeof flags.prompts === "string") {
       const pf = path.resolve(root, flags.prompts);
@@ -341,7 +328,7 @@ async function main() {
 
   if (cmd === "tts") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     const voiceDir = path.resolve(root, "output/voice");
     const trackPath = path.resolve(root, "output/voice-track.json");
     const voiceId = (flags.voice as string) || "presenter_male";
@@ -388,7 +375,7 @@ async function main() {
 
   if (cmd === "bgm") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     const outPath = path.resolve(root, "output/bgm.mp3");
     const force = Boolean(flags.force);
     const promptOverride = (flags.prompt as string) || undefined;
@@ -421,7 +408,7 @@ async function main() {
     const flags = parseFlags(rest);
     const targetLang = positional[0];
     if (!targetLang) { console.error(`translate: target lang required (e.g. en, ja, zh-tw)`); process.exit(1); }
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
     await runTranslate({
       storyboardPath: inPath,
@@ -500,7 +487,7 @@ async function main() {
 
   if (cmd === "render") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     const outputDir = path.resolve(root, "output");
     const only = flags.only != null ? parseInt(String(flags.only), 10) : null;
     if (only !== null && !Number.isInteger(only)) {
@@ -532,7 +519,7 @@ async function main() {
 
   if (cmd === "cost") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
     const { estimateStoryboard, summarizeCost } = await import("./cost.ts");
     const sb = JSON.parse(fs.readFileSync(inPath, "utf8"));
@@ -550,7 +537,7 @@ async function main() {
 
   if (cmd === "validate") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
     const { validateStoryboard, splitFindings } = await import("./validate.ts");
     const { scoreSlideshowRisk } = await import("./slideshow.ts");
@@ -567,7 +554,7 @@ async function main() {
 
   if (cmd === "review") {
     const flags = parseFlags(rest);
-    const inPath = path.resolve(root, (flags.in as string) || "output/storyboard.json");
+    const inPath = (flags.in ? path.resolve(process.cwd(), flags.in as string) : path.resolve(root, "output/storyboard.json"));
     if (!fs.existsSync(inPath)) { console.error(`Storyboard JSON not found: ${inPath}`); process.exit(1); }
     // The storyboard lives in output/, so final.mp4 + qa/ are siblings of it.
     const outputDir = path.dirname(inPath);
