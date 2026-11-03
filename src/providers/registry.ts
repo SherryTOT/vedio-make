@@ -39,6 +39,7 @@ import { mytokkImage } from "./mytokk/image.ts";
 import { tavilySearch } from "./tavily/search.ts";
 
 import { edgeTts } from "./edge/tts.ts";
+import { systemTts } from "./system/tts.ts";
 import { voiceRouter } from "./voice-router.ts";
 
 import { pexelsAsset } from "./pexels/asset.ts";
@@ -56,6 +57,7 @@ const REGISTRY = {
     voice: voiceRouter,   // two-engine prefix router (default) — Edge free + MiniMax paid + clones
     minimax: minimaxTts,
     edge: edgeTts,        // free, no key
+    system: systemTts,    // macOS `say` — free, offline; last-resort placeholder voice
     openai: openaiTts,
   } as Record<string, TtsClient>,
   music: {
@@ -97,7 +99,7 @@ export function listProviders(capability: Capability): string[] {
 // network — Edge's handshake is a known offender), fall back to a safer one.
 // Edge TTS is free and needs no key, so it's the natural TTS safety net.
 const FALLBACKS: Partial<Record<Capability, Record<string, string>>> = {
-  tts:    { voice: "edge", minimax: "edge" },
+  tts:    { voice: "edge", minimax: "edge", edge: "system" },
   chat:   { minimax: "deepseek", deepseek: "openai" },
   image:  { minimax: "openai" },
   search: { minimax: "tavily", tavily: "minimax" },
