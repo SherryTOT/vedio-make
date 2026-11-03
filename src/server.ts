@@ -459,6 +459,21 @@ function authOK(req: http.IncomingMessage, token: string): boolean {
 }
 
 /** Stamp a default style preset on a storyboard body that lacks one. Never throws. */
+/**
+ * Optimistic concurrency for storyboard.json. `rev` is a hash of the file bytes and is never stored,
+ * so EVERY writer (render's incremental writes, analyze/images tasks, the CLI) bumps it without
+ * having to know about it. The UI echoes the rev it last read in its PUT; a mismatch means someone
+ * else wrote in between, and the save is refused (409 code "stale") instead of clobbering them.
+ */
+function storyboardRev(raw: string): string {
+  return crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+}
+function readStoryboardWithRev(sbPath: string): Record<string, unknown> | null {
+  if (!fs.existsSync(sbPath)) return null;
+  const raw = fs.readFileSync(sbPath, "utf8");
+  return { ...JSON.parse(raw), rev: storyboardRev(raw) };
+}
+
 function ensureDesignDefault(raw: string): string {
   try {
     const sb = JSON.parse(raw);
@@ -555,7 +570,7 @@ export async function startServer(opts: {
         if (req.method === "GET" && sub === "") {
           // Return project meta + storyboard (if exists) + file list
           const sbPath = path.join(proj.dir, "output/storyboard.json");
-          const storyboard = fs.existsSync(sbPath) ? JSON.parse(fs.readFileSync(sbPath, "utf8")) : null;
+          const storyboard = readStoryboardWithRev(sbPath);
           const files = listProjectFiles(proj.dir);
           const projTasks = [...tasks.values()].filter((t) => t.projectId === projId);
           return sendJson(res, 200, { project: proj, storyboard, files, tasks: projTasks });
@@ -587,8 +602,9 @@ export async function startServer(opts: {
 
         if (req.method === "GET" && sub === "/storyboard") {
           const sbPath = path.join(proj.dir, "output/storyboard.json");
-          if (!fs.existsSync(sbPath)) return sendJson(res, 404, { error: "no storyboard yet" });
-          return sendJson(res, 200, JSON.parse(fs.readFileSync(sbPath, "utf8")));
+          const sb = readStoryboardWithRev(sbPath);
+          if (!sb) return sendJson(res, 404, { error: "no storyboard yet" });
+          return sendJson(res, 200, sb);
         }
 
         if (req.method === "PUT" && sub === "/storyboard") {
@@ -598,11 +614,22 @@ export async function startServer(opts: {
           }
           const body = await readBody(req);
           // Reject malformed JSON instead of writing a corrupt project state file.
-          try { JSON.parse(body); } catch {
+          let incoming: unknown;
+          try { incoming = JSON.parse(body); } catch {
             return sendJson(res, 400, { error: "分镜不是合法 JSON,已拒绝写入(避免损坏项目状态)。" });
           }
-          fs.writeFileSync(path.join(proj.dir, "output/storyboard.json"), ensureDesignDefault(body));
-          return sendJson(res, 200, { ok: true });
+          if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+            return sendJson(res, 400, { error: "分镜必须是 JSON 对象,已拒绝写入。" });
+          }
+          const { rev, ...board } = incoming as Record<string, unknown>;
+          const sbPath = path.join(proj.dir, "output/storyboard.json");
+          // A PUT without rev (curl / older clients) is accepted as before; the UI always sends one.
+          if (typeof rev === "string" && fs.existsSync(sbPath) && rev !== storyboardRev(fs.readFileSync(sbPath, "utf8"))) {
+            return sendJson(res, 409, { error: "分镜已被其他进程更新(版本不一致),已拒绝覆盖。请合并最新版本后重试。", code: "stale" });
+          }
+          const out = ensureDesignDefault(JSON.stringify(board));
+          fs.writeFileSync(sbPath, out);
+          return sendJson(res, 200, { ok: true, rev: storyboardRev(out) });
         }
 
         // 土味 lint — scan each scene's would-be composition for AI-slop signals.

@@ -16,9 +16,10 @@ const state = { pid: null, sb: null, catalog: null, designs: null, lint: null, s
 async function api(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers: { ...AUTH, ...(opts.headers || {}) } });
   if (!res.ok) {
-    let msg = res.statusText;
-    try { const j = await res.json(); msg = j.error || msg; } catch {}
-    throw new Error(msg);
+    let msg = res.statusText, code;
+    try { const j = await res.json(); msg = j.error || msg; code = j.code; } catch {}
+    const err = new Error(msg); err.status = res.status; err.code = code;
+    throw err;
   }
   const ct = res.headers.get("content-type") || "";
   return ct.includes("json") ? res.json() : res.text();
@@ -405,7 +406,7 @@ function stStatusText(s) { return { pending: "待渲染", rendering: "渲染中"
 
 // ─── save (debounced PUT of whole storyboard) ───
 function scheduleSave() {
-  state.dirty = true;
+  state.dirty = true; state.staleRetries = 0;
   setSaveStatus("saving", "保存中…");
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(save, 600);
@@ -413,17 +414,25 @@ function scheduleSave() {
 async function save() {
   if (!state.sb) return;
   try {
-    await api(`/api/projects/${state.pid}/storyboard`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state.sb) });
-    state.dirty = false;
+    const r = await api(`/api/projects/${state.pid}/storyboard`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state.sb) });
+    if (r && r.rev) state.sb.rev = r.rev;
+    state.dirty = false; state.staleRetries = 0;
     setSaveStatus("", "已保存");
   } catch (e) {
-    const d = classifySaveError(e.message);
+    const d = classifySaveError(e.message, e.code);
+    if (d.kind === "stale" && (state.staleRetries = (state.staleRetries || 0) + 1) <= 3) {
+      // A render / task / CLI wrote since we read: adopt its render state + rev, keep our edits, retry.
+      setSaveStatus("saving", d.status);
+      const fresh = await api(`/api/projects/${state.pid}/storyboard`).catch(() => null);
+      if (fresh) { state.sb = reconcileBoard(state.sb, fresh, true).sb; renderBoardHeader(); renderScenes(); }
+      return save();
+    }
     if (d.kind === "busy") {
       setSaveStatus("saving", d.status);
       clearTimeout(state.saveTimer);
       state.saveTimer = setTimeout(save, d.retryMs);
     } else {
-      setSaveStatus("error", d.status); toast("保存失败:" + e.message, "error");
+      setSaveStatus("error", "保存失败"); toast("保存失败:" + e.message, "error");
     }
   }
 }
