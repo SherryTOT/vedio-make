@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { hasProviderKey, loadProviderConfig } from "./providers/shared.ts";
 import { edgeTts } from "./providers/edge/tts.ts";
-import { HYPERFRAMES_PKG } from "./render.ts";
+import { HYPERFRAMES_PKG, remotionCacheDir } from "./render.ts";
 
 export type Status = "ok" | "warn" | "fail";
 export interface Check { group: string; name: string; status: Status; detail: string }
@@ -84,6 +84,12 @@ export function engineChecks(home = os.homedir()): Check[] {
   return [
     { group: "引擎", name: HYPERFRAMES_PKG, status: hf ? "ok" : "warn", detail: hf ? "已缓存" : "未缓存:首次渲染会经 npx 下载(约 170 MB)" },
     { group: "引擎", name: "无头 Chrome", status: chrome ? "ok" : "warn", detail: chrome ? "已缓存" : "未缓存:首次渲染会下载(约 530 MB)" },
+    {
+      group: "引擎", name: "Remotion 共享依赖",
+      status: fs.existsSync(path.join(remotionCacheDir(path.join(home, ".cache", "vedio-make")), "node_modules", "remotion")) ? "ok" : "warn",
+      detail: fs.existsSync(path.join(remotionCacheDir(path.join(home, ".cache", "vedio-make")), "node_modules", "remotion"))
+        ? "已安装" : "未安装:第一个 Remotion 镜头会装一次(之后所有项目共用)",
+    },
   ];
 }
 

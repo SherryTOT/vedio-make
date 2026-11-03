@@ -23,7 +23,7 @@ import type { Scene, Storyboard } from "./types.ts";
 import { hardenHyperFrames } from "./harden.ts";
 import { resolveDesign, resolveSceneDesign } from "./methods/designs.ts";
 import { lintSource } from "./methods/lint.ts";
-import { run as runProc, runCapture, sleep } from "./proc.ts";
+import { run as runProc, runCapture, sleep, CancelledError } from "./proc.ts";
 import { validateStoryboard, splitFindings } from "./validate.ts";
 import { scoreSlideshowRisk } from "./slideshow.ts";
 import { reviewFinal, summarizeReport } from "./review.ts";
@@ -45,11 +45,13 @@ interface RenderOpts {
   onProgress?: (done: number, total: number, label: string) => void;
   /** Per-line subprocess output sink — drives the daemon's live task log. */
   onLine?: (line: string) => void;
+  /** Task cancel: aborts the running subprocess group (proc.ts) and stops before the next scene. */
+  signal?: AbortSignal;
 }
 
 // Per-render output sink. Tasks are serialized by the daemon (FIFO), so a
 // module-level holder is safe and avoids threading onLine through every helper.
-let RENDER_IO: { onLine?: (line: string) => void } = {};
+let RENDER_IO: { onLine?: (line: string) => void; signal?: AbortSignal } = {};
 
 // Watchdog timeouts. A render that stalls (e.g. on an un-vendored CDN) is
 // killed instead of hanging for minutes. Overridable via env for slow hosts.
@@ -57,6 +59,69 @@ let RENDER_IO: { onLine?: (line: string) => void } = {};
 export const HYPERFRAMES_PKG = "hyperframes@0.6.7";
 const HF_TIMEOUT_MS = Number(process.env.PIPELINE_HF_TIMEOUT_MS) || 8 * 60_000;
 const RM_TIMEOUT_MS = Number(process.env.PIPELINE_RM_TIMEOUT_MS) || 12 * 60_000;
+
+/**
+ * Exact Remotion stack for every Remotion scene. Pinned (no ^ ranges) so a render is reproducible;
+ * 4.0.487 is the last release before the 07-11 acceptance renders that used ^4.0.220.
+ */
+export const REMOTION_DEPS: Record<string, string> = {
+  "@remotion/bundler": "4.0.487",
+  "@remotion/cli": "4.0.487",
+  "@remotion/renderer": "4.0.487",
+  react: "18.3.1",
+  "react-dom": "18.3.1",
+  remotion: "4.0.487",
+  d3: "7.9.0",
+};
+export const REMOTION_DEV_DEPS: Record<string, string> = { "@types/d3": "7.4.3", "@types/react": "18.3.3", typescript: "5.4.5" };
+
+/** One shared node_modules per dependency set (keyed by its hash), reused by every scene and project. */
+export function remotionCacheDir(root = process.env.PIPELINE_REMOTION_CACHE || path.join(os.homedir(), ".cache", "vedio-make")): string {
+  const key = crypto.createHash("sha256").update(JSON.stringify([REMOTION_DEPS, REMOTION_DEV_DEPS])).digest("hex").slice(0, 12);
+  return path.join(root, `remotion-${key}`);
+}
+
+async function ensureRemotionDeps(): Promise<string> {
+  const dir = remotionCacheDir();
+  if (fs.existsSync(path.join(dir, "node_modules", "remotion", "package.json"))) return dir;
+  // Install into a temp dir and rename, so an interrupted install never leaves a half-filled cache.
+  const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
+  fs.mkdirSync(tmp, { recursive: true });
+  fs.writeFileSync(path.join(tmp, "package.json"), JSON.stringify(
+    { name: "vedio-make-remotion-cache", private: true, version: "0.0.0", dependencies: REMOTION_DEPS, devDependencies: REMOTION_DEV_DEPS }, null, 2));
+  try {
+    await sh("npm", ["install", "--silent", "--no-audit", "--no-fund"], tmp, RM_TIMEOUT_MS, "npm install Remotion 共享缓存(仅首次)");
+    try { fs.renameSync(tmp, dir); } catch { /* another render won the race — use its copy */ }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  return dir;
+}
+
+/**
+ * A headless shell already on disk (puppeteer's, which HyperFrames uses too), so Remotion does not
+ * download its own ~93 MB copy into node_modules/.remotion. PIPELINE_REMOTION_BROWSER overrides;
+ * undefined → Remotion falls back to its own download.
+ */
+export function findHeadlessShell(home = os.homedir()): string | undefined {
+  if (process.env.PIPELINE_REMOTION_BROWSER) return process.env.PIPELINE_REMOTION_BROWSER;
+  const root = path.join(home, ".cache", "puppeteer", "chrome-headless-shell");
+  if (!fs.existsSync(root)) return undefined;
+  for (const ver of fs.readdirSync(root).sort().reverse()) {
+    for (const plat of ["chrome-headless-shell-mac-arm64", "chrome-headless-shell-mac-x64", "chrome-headless-shell-linux64"]) {
+      const exe = path.join(root, ver, plat, "chrome-headless-shell");
+      if (fs.existsSync(exe)) return exe;
+    }
+  }
+  return undefined;
+}
+
+/** sceneDir/node_modules → <cache>/node_modules. Deleting the scene dir removes only the link. */
+export function linkSharedNodeModules(sceneDir: string, cacheDir: string): void {
+  const link = path.join(sceneDir, "node_modules");
+  fs.rmSync(link, { recursive: true, force: true });
+  fs.symlinkSync(path.join(cacheDir, "node_modules"), link, "dir");
+}
 const FFMPEG_TIMEOUT_MS = Number(process.env.PIPELINE_FFMPEG_TIMEOUT_MS) || 10 * 60_000;
 // Brief settle between consecutive hyperframes renders so Chromium fully exits
 // before the next launch (cheap insurance against any browser-cleanup overlap).
@@ -114,7 +179,7 @@ function sideFilesFingerprint(sideFiles: Record<string, string> | undefined): st
 
 /** Thin wrapper over the async process runner with the active render's log sink. */
 function sh(cmd: string, args: string[], cwd: string, timeoutMs: number, label: string): Promise<void> {
-  return runProc(cmd, args, { cwd, timeoutMs, label, onLine: RENDER_IO.onLine });
+  return runProc(cmd, args, { cwd, timeoutMs, label, onLine: RENDER_IO.onLine, signal: RENDER_IO.signal });
 }
 
 async function renderHyperFramesScene(
@@ -251,32 +316,14 @@ Config.setPixelFormat("yuv420p");
   fs.writeFileSync(
     path.join(sceneDir, "package.json"),
     JSON.stringify(
-      {
-        name: path.basename(sceneDir),
-        private: true,
-        version: "0.0.0",
-        dependencies: {
-          "@remotion/bundler": "^4.0.220",
-          "@remotion/cli": "^4.0.220",
-          "@remotion/renderer": "^4.0.220",
-          "react": "^18.3.1",
-          "react-dom": "^18.3.1",
-          "remotion": "^4.0.220",
-          "d3": "^7.9.0",
-        },
-        devDependencies: {
-          "@types/d3": "^7.4.3",
-          "@types/react": "^18.3.3",
-          typescript: "^5.4.5",
-        },
-      },
+      { name: path.basename(sceneDir), private: true, version: "0.0.0", dependencies: REMOTION_DEPS, devDependencies: REMOTION_DEV_DEPS },
       null,
       2
     )
   );
 
-  // Install + render
-  await sh("npm", ["install", "--silent", "--no-audit", "--no-fund"], sceneDir, RM_TIMEOUT_MS, `npm install ${path.basename(sceneDir)}`);
+  // Link the shared install instead of running npm install (~500 MB) in every scene directory.
+  linkSharedNodeModules(sceneDir, await ensureRemotionDeps());
   const rawOut = path.join(sceneDir, "raw.mp4");
   await sh(
     "npx",
@@ -289,6 +336,7 @@ Config.setPixelFormat("yuv420p");
       path.resolve(rawOut),
       `--props=${JSON.stringify(props)}`,
       "--concurrency=4",
+      ...(findHeadlessShell() ? [`--browser-executable=${findHeadlessShell()}`] : []),
     ],
     sceneDir,
     RM_TIMEOUT_MS,
@@ -873,7 +921,7 @@ async function stitchFinal(
 }
 
 export async function runRender(opts: RenderOpts): Promise<void> {
-  RENDER_IO = { onLine: opts.onLine };
+  RENDER_IO = { onLine: opts.onLine, signal: opts.signal };
   try {
     await runRenderInner(opts);
   } finally {
@@ -1039,6 +1087,7 @@ async function runRenderInner(opts: RenderOpts): Promise<void> {
   if (workers <= 1) {
     // Sequential — preserve current behavior + readable logs.
     for (const job of jobs) {
+      if (opts.signal?.aborted) throw new CancelledError("渲染");
       opts.onProgress?.(doneCount, jobs.length, `渲染镜头 #${job.scene.index}/${sb.scenes.length}`);
       try {
         await execute(job);
@@ -1050,6 +1099,8 @@ async function runRenderInner(opts: RenderOpts): Promise<void> {
         // and the daemon's storyboard reflects per-scene progress immediately.
         fs.writeFileSync(opts.storyboardPath, JSON.stringify(sb, null, 2));
       } catch (e) {
+        // A cancel is not a scene failure: leave the scene pending and stop the whole render.
+        if (opts.signal?.aborted) { job.scene.status = "pending"; throw new CancelledError("渲染"); }
         job.scene.status = "failed";
         console.error(`[scene ${job.scene.index}] render failed:`, (e as Error).message);
       }
@@ -1062,6 +1113,7 @@ async function runRenderInner(opts: RenderOpts): Promise<void> {
     let cursor = 0;
     async function workerLoop(workerId: number): Promise<void> {
       while (true) {
+        if (opts.signal?.aborted) throw new CancelledError("渲染");
         const i = cursor++;
         if (i >= jobs.length) return;
         const job = jobs[i];
@@ -1073,6 +1125,7 @@ async function runRenderInner(opts: RenderOpts): Promise<void> {
           renderedByIndex.set(job.scene.index, job.mp4Path);
           fs.writeFileSync(opts.storyboardPath, JSON.stringify(sb, null, 2));
         } catch (e) {
+          if (opts.signal?.aborted) { job.scene.status = "pending"; throw new CancelledError("渲染"); }
           job.scene.status = "failed";
           console.error(`[worker ${workerId}] scene ${job.scene.index} failed:`, (e as Error).message);
         }
