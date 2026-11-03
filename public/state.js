@@ -30,14 +30,19 @@ export function reconcileBoard(local, fresh, dirty) {
     if (d) for (const f of RENDER_FIELDS) sc[f] = d[f];
   }
   if (fresh.stages) local.stages = fresh.stages;
+  // The merged copy now contains this disk version's render state, so save against its rev
+  // (otherwise the server would refuse the follow-up save as stale).
+  if (fresh.rev) local.rev = fresh.rev;
   return { sb: local, needsSave: true };
 }
 
 /**
- * What a failed storyboard PUT means for the UI. A render in progress rejects saves (409);
- * keep the edits and retry later — never report "已保存" when the bytes didn't land.
+ * What a failed storyboard PUT means for the UI — never report "已保存" when the bytes didn't land.
+ * stale: someone else wrote since we read (server code "stale") → refetch, merge, retry now.
+ * busy:  a render is running (409) → keep the edits and retry later.
  */
-export function classifySaveError(message) {
+export function classifySaveError(message, code) {
+  if (code === "stale") return { kind: "stale", status: "分镜已被更新,合并后重试" };
   if (/渲染进行中|409/.test(message || "")) {
     return { kind: "busy", retryMs: 5000, status: "渲染中,稍后自动保存" };
   }

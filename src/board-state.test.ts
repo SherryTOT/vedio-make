@@ -59,3 +59,16 @@ test("classifySaveError: any other failure is surfaced as an error, never as sav
   assert.equal(classifySaveError("Internal Server Error").kind, "error");
   assert.equal(classifySaveError(undefined).kind, "error");
 });
+
+test("classifySaveError: a stale-rev 409 means refetch + merge + retry now", () => {
+  assert.equal(classifySaveError("分镜已被其他进程更新(版本不一致)", "stale").kind, "stale");
+});
+
+test("reconcileBoard on a dirty board adopts the disk rev it merged, so the next save is not refused", () => {
+  const local = { rev: "old", scenes: [scene(1, "我改的")] };
+  const fresh = { rev: "new", scenes: [scene(1, "x", { status: "rendered" })] };
+  const r = reconcileBoard(local, fresh, true);
+  assert.equal(r.sb.rev, "new");
+  assert.equal(r.sb.scenes[0].text, "我改的");
+  assert.equal(r.sb.scenes[0].status, "rendered");
+});
