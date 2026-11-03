@@ -1,3 +1,5 @@
+import { renumberScenes, reconcileBoard, classifySaveError } from "./state.js";
+
 const $ = (s) => document.querySelector(s);
 const TOKEN = window.__PIPELINE_TOKEN__ || new URLSearchParams(location.hash.slice(1)).get("token") || new URLSearchParams(location.search).get("token") || (window.__PIPELINE_AUTH_REQUIRED__ ? window.prompt("请输入服务端终端显示的访问令牌") : "") || "";
 // Credentials supplied in a link should not remain in browser history/referrers.
@@ -298,10 +300,7 @@ function transitionSelect(i, value) {
 }
 
 // ─── scene add / delete / reorder ───
-function renumber() {
-  let t = 0;
-  state.sb.scenes.forEach((sc, k) => { sc.index = k + 1; sc.startSec = t; sc.endSec = t + (sc.durationSec || 0); t = sc.endSec; });
-}
+function renumber() { renumberScenes(state.sb.scenes); }
 function moveScene(i, dir) {
   const a = state.sb.scenes, j = i + dir;
   if (j < 0 || j >= a.length) return;
@@ -418,15 +417,13 @@ async function save() {
     state.dirty = false;
     setSaveStatus("", "已保存");
   } catch (e) {
-    // Render in progress rejects the save (409) so it can't clobber the render's
-    // incremental writes. Keep the local edits and retry once the render frees up
-    // — never report "已保存" when the bytes didn't land.
-    if (/渲染进行中|409/.test(e.message)) {
-      setSaveStatus("saving", "渲染中,稍后自动保存");
+    const d = classifySaveError(e.message);
+    if (d.kind === "busy") {
+      setSaveStatus("saving", d.status);
       clearTimeout(state.saveTimer);
-      state.saveTimer = setTimeout(save, 5000);
+      state.saveTimer = setTimeout(save, d.retryMs);
     } else {
-      setSaveStatus("error", "保存失败"); toast("保存失败:" + e.message, "error");
+      setSaveStatus("error", d.status); toast("保存失败:" + e.message, "error");
     }
   }
 }
@@ -467,22 +464,12 @@ async function runOp(op, body, label) {
 }
 function setOpsDisabled(d) { document.querySelectorAll(".op, .d-render").forEach((b) => (b.disabled = d)); }
 
-// Merge disk state after a task WITHOUT discarding unsaved local edits. When the
-// board is clean, disk is authoritative (wholesale replace). When there are
-// unsaved edits, keep them and graft only render-owned fields, then persist the
-// merge — otherwise the pending autosave PUT would clobber renderedPath/stages.
+// Merge disk state after a task without discarding unsaved local edits (see state.js).
 function reconcileAfterTask(fresh) {
-  if (!state.dirty) {
-    state.sb = fresh; renderBoardHeader(); renderScenes(); return;
-  }
-  const byIdx = new Map((fresh.scenes || []).map((s) => [s.index, s]));
-  for (const sc of state.sb.scenes) {
-    const d = byIdx.get(sc.index);
-    if (d) { sc.renderedPath = d.renderedPath; sc.renderedHash = d.renderedHash; sc.status = d.status; }
-  }
-  if (fresh.stages) state.sb.stages = fresh.stages;
+  const { sb, needsSave } = reconcileBoard(state.sb, fresh, state.dirty);
+  state.sb = sb;
   renderBoardHeader(); renderScenes();
-  scheduleSave(); // persist merged copy (local edits + freshly-written render fields)
+  if (needsSave) scheduleSave(); // persist merged copy (local edits + freshly-written render fields)
 }
 
 async function pollTask(id) {
