@@ -19,7 +19,8 @@
     "templates",
     "design-presets",
     "public",
-    "docs",
+    "docs/DIRECTION.md",
+    "docs/MOTION.md",
     "assets/fonts",
     "assets/vendor"
   ],

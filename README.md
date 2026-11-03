@@ -62,6 +62,8 @@ npx tsx src/cli.ts render     # → output/final.mp4
 
 ## CLI(`pipeline <cmd>` 或 `npx tsx src/cli.ts <cmd>`)
 
+`pipeline --help` 看全部命令,`pipeline help render` 只看一条。
+
 | 命令 | 作用 |
 |---|---|
 | `plan --in x.srt --title …` | SRT → `storyboard.json`(每镜一个 scene,方法待填) |
@@ -116,3 +118,7 @@ CI 见 `.github/workflows/ci.yml`。
 ## License
 
 MIT。渲染引擎(HyperFrames / Remotion)与各 provider 有各自的许可与计费,自行确认。
+
+## 维护者文档
+
+交接记录、审计报告、给 AI 执行会话的任务书在 [`docs/internal/`](docs/internal/),不随 npm 包发布;使用本工具不需要读它们。
